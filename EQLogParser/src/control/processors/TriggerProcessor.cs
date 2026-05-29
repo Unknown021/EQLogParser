@@ -24,7 +24,6 @@ namespace EQLogParser
     public const string LogTimeCode = "{logtime}";
     public const string NullCode = "{null}";
     public const string TimerWarnTimeCode = "{timer-warn-time-value}";
-    public readonly TriggerLogStore TriggerLog;
     public readonly string CurrentCharacterId;
     public readonly string CurrentProcessorName;
     private const int TRIGGER_LOG_DELAY = 750;
@@ -69,7 +68,6 @@ namespace EQLogParser
     {
       CurrentCharacterId = id;
       CurrentProcessorName = name;
-      TriggerLog = new TriggerLogStore(name);
       _currentPlayer = playerName;
       _characterActiveColor = activeColor;
       _characterIdleColor = idleColor;
@@ -95,6 +93,9 @@ namespace EQLogParser
 
     internal async Task StartAsync()
     {
+      // Register this processor's log collection before processing any triggers
+      TriggerLogManager.Instance.EnsureCollection(CurrentProcessorName);
+      
       await GetActiveTriggersAsync();
       _lexicon = TriggerUtil.ToLexiconDictionary(await TriggerStateDB.Instance.GetLexicon());
       _trustedPlayers = [.. await TriggerStateDB.Instance.GetTrustedPlayers()];
@@ -1528,7 +1529,7 @@ namespace EQLogParser
           switch (modifierName.ToLowerInvariant())
           {
             case "capitalize":
-              value = TextUtils.ToUpper(value, CultureInfo.CurrentCulture);
+              value = TextUtils.CapitalizeFirst(value, CultureInfo.CurrentCulture);
               break;
 
             case "center":
@@ -1782,7 +1783,7 @@ namespace EQLogParser
         });
       }
 
-      TriggerLog.AddRange(entries);
+      TriggerLogManager.Instance.AddRange(CurrentProcessorName, entries);
     }
 
     private async Task SetActiveTriggersAsync(Dictionary<string, TriggerWrapper> activeTriggersById, HashSet<string> requiredOverlayIds)

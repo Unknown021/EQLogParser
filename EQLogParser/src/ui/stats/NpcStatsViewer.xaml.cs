@@ -38,7 +38,7 @@ namespace EQLogParser
         });
       }
 
-      MainActions.EventsThemeChanged += EventsThemeChanged;
+      ThemeConfig.EventsThemeChanged += EventsThemeChanged;
     }
 
     private void Load()
@@ -46,7 +46,7 @@ namespace EQLogParser
       var npcStatsRows = new Dictionary<string, NpcStatsRow>();
       foreach (var stats in RecordsStore.Instance.GetAllNpcResistStats())
       {
-        var upperNpc = TextUtils.ToUpper(stats.Npc);
+        var upperNpc = TextUtils.CapitalizeFirst(stats.Npc);
         if (!PlayerRegistry.Instance.IsPetOrPlayerOrMerc(stats.Npc) && !PlayerRegistry.Instance.IsPetOrPlayerOrMerc(upperNpc))
         {
           var count = 0u;
@@ -188,7 +188,7 @@ namespace EQLogParser
     {
       if (e.Column.MappingName == "Npc")
       {
-        e.Column.Width = MainActions.CurrentNpcWidth;
+        e.Column.Width = ThemeConfig.CurrentNpcWidth;
       }
       else if (e.Column.MappingName?.EndsWith("Text", StringComparison.OrdinalIgnoreCase) != true)
       {

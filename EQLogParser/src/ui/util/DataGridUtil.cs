@@ -409,8 +409,8 @@ namespace EQLogParser
         value,
         System.Globalization.CultureInfo.CurrentCulture,
         FlowDirection.LeftToRight,
-        new Typeface(MainActions.CurrentFontFamily),
-        MainActions.CurrentFontSize,
+        new Typeface(ThemeConfig.CurrentFontFamily),
+        ThemeConfig.CurrentFontSize,
         Brushes.Black, // The brush doesn't affect size calculation
         VisualTreeHelper.GetDpi(new Window()).PixelsPerDip // This ensures the text size is scaled correctly for the display DPI
       );
@@ -538,7 +538,8 @@ namespace EQLogParser
         if (!found.Contains(columns[i].MappingName))
         {
           // AssignedGroup should always be visible when it's the new column
-          if (columns[i].MappingName == "AssignedGroup")
+          // if visible is null then no column data exists
+          if (visible != null && columns[i].MappingName == "AssignedGroup")
           {
             addAssignedGroupColumn = columns[i];
             continue;
@@ -597,34 +598,34 @@ namespace EQLogParser
     {
       if (mappingName is "Acted" or "Actor" or "Record.Npc" or "Npc" or "Target")
       {
-        return MainActions.CurrentNpcWidth;
+        return ThemeConfig.CurrentNpcWidth;
       }
 
       if (mappingName is "Name" or "Pet")
       {
-        return MainActions.CurrentNameWidth;
+        return ThemeConfig.CurrentNameWidth;
       }
 
       if (mappingName is "Spell" or "Key" or "Action")
       {
-        return MainActions.CurrentSpellWidth;
+        return ThemeConfig.CurrentSpellWidth;
       }
 
       if (mappingName is "SortId" or "BeginTime" or "LogTime" or "RollTime")
       {
-        return MainActions.CurrentDateTimeWidth;
+        return ThemeConfig.CurrentDateTimeWidth;
       }
 
       if (mappingName is "Record.Item" or "Details")
       {
-        return MainActions.CurrentItemWidth;
+        return ThemeConfig.CurrentItemWidth;
       }
 
       if (mappingName is "Avg" or "AvgCrit" or "AvgLucky" or "Special" or "Dps" or "Sdps" or
           "Eval" or "Priority" or "Count" or "From" or "To" or "Rolled" or "MeleeAttempts"
           or "Min" or "Max" or "BestSec" or "FlurryRate" or "ResistRate")
       {
-        return MainActions.CurrentMediumWidth;
+        return ThemeConfig.CurrentMediumWidth;
       }
 
       if (mappingName is "TimeSince" or "Hits" or "Lucky" or "Critical" or "Twincast" or
@@ -632,12 +633,12 @@ namespace EQLogParser
           "LuckRate" or "ExtraRate" or "BaneHits" or "MeleeAccRate" or "MeleeHitRate" or
           "TwincastRate" or "TwincastHits")
       {
-        return MainActions.CurrentShortWidth;
+        return ThemeConfig.CurrentShortWidth;
       }
 
       if (mappingName is "AssignedGroup")
       {
-        return MainActions.CurrentShortWidth;
+        return ThemeConfig.CurrentShortWidth;
       }
 
       if (!string.IsNullOrEmpty(text))

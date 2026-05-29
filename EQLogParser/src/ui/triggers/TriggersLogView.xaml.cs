@@ -2,6 +2,7 @@
 using Syncfusion.UI.Xaml.Grid;
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Windows;
@@ -14,11 +15,13 @@ namespace EQLogParser
 {
   public partial class TriggersLogView : IDocumentContent
   {
-    private List<TriggerLogStore> _triggerLogs;
-    private readonly DispatcherTimer _updateTimer;
+    private readonly DelayedAction _batchRefresh;
+    private bool _ready;
+    private ObservableCollection<TriggerLogEntry> _currentCollection;
 
     public TriggersLogView()
     {
+      _batchRefresh = new DelayedAction(TimeSpan.FromSeconds(1), RefreshGrid);
       InitializeComponent();
 
       // default these columns to descending
@@ -26,46 +29,44 @@ namespace EQLogParser
       dataGrid.SortColumnsChanging += (s, e) => DataGridUtil.SortColumnsChanging(s, e, desc);
       dataGrid.SortColumnsChanged += (s, e) => DataGridUtil.SortColumnsChanged(s, e, desc);
 
-      _updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000) };
-      _updateTimer.Tick += (_, _) =>
-      {
-        _updateTimer.Stop();
-        var colDescriptions = dataGrid.SortColumnDescriptions;
-        if (colDescriptions.Count != 1 || colDescriptions[0].ColumnName != "BeginTime" ||
-            colDescriptions[0].SortDirection != ListSortDirection.Descending)
-        {
-          dataGrid.SortColumnDescriptions.Clear();
-          dataGrid.SortColumnDescriptions.Add(new SortColumnDescription
-          { ColumnName = "BeginTime", SortDirection = ListSortDirection.Descending });
-          dataGrid?.View?.Refresh();
-        }
-      };
+      Loaded += ContentLoaded;
+    }
 
-      TriggerManager.Instance.EventsProcessorsUpdated += EventsProcessorsUpdated;
-      MainActions.EventsThemeChanged += EventsThemeChanged;
+    private void ContentLoaded(object sender, RoutedEventArgs e)
+    {
+      if (VisualParent != null && !_ready)
+      {
+        TriggerManager.Instance.EventsProcessorsUpdated += EventsProcessorsUpdated;
+        ThemeConfig.EventsThemeChanged += EventsThemeChanged;
+        _ready = true;
+        EventsProcessorsUpdated();
+      }
     }
 
     private void EventsThemeChanged(string _) => DataGridUtil.RefreshTableColumns(dataGrid);
 
-    private void EventsProcessorsUpdated(List<TriggerLogStore> updatedLogs)
+    private void EventsProcessorsUpdated()
     {
-      _triggerLogs = updatedLogs;
-
       Dispatcher.InvokeAsync(() =>
       {
         if (logList != null)
         {
-          var list = _triggerLogs.Select(log => log.Name).ToList();
+          // Capture current selection before resetting ItemsSource
+          var currentSelection = logList.SelectedItem as string;
+
+          var logs = TriggerLogManager.Instance.GetLogs(out var activeProcessors);
+          // Sort alphabetically for consistent ordering
+          var list = activeProcessors.OrderBy(x => x).ToList();
 
           logList.ItemsSource = list;
-          // not sure why
           logList.SelectedIndex = -1;
 
-          if (_triggerLogs.Count > 0)
+          if (list.Count > 0)
           {
-            if (logList.SelectedItem is string selected && list.IndexOf(selected) is var found and > -1)
+            // Try to preserve user's previous selection if it still exists
+            if (!string.IsNullOrEmpty(currentSelection) && list.Contains(currentSelection))
             {
-              logList.SelectedIndex = found;
+              logList.SelectedIndex = list.IndexOf(currentSelection);
             }
             else
             {
@@ -80,15 +81,30 @@ namespace EQLogParser
     {
       if (sender is ComboBox combo && dataGrid != null)
       {
+        // Unsubscribe from previous collection
+        if (_currentCollection != null)
+        {
+          _currentCollection.CollectionChanged -= TheCollectionChanged;
+          _currentCollection = null;
+        }
+
         var sorting = dataGrid.SortColumnDescriptions.ToList();
         dataGrid.SortColumnDescriptions.Clear();
-        var collection = combo.SelectedIndex >= 0 ? _triggerLogs[combo.SelectedIndex].Entries : null;
+
+        BulkObservableCollection<TriggerLogEntry> collection = null;
+        if (combo.SelectedIndex >= 0 && combo.SelectedItem is string selectedName)
+        {
+          var logs = TriggerLogManager.Instance.GetLogs(out _);
+          collection = logs.TryGetValue(selectedName, out var log) ? log : new BulkObservableCollection<TriggerLogEntry>();
+        }
+
         dataGrid.ItemsSource = collection;
         sorting.ForEach(item => dataGrid.SortColumnDescriptions.Add(item));
 
+        // Subscribe to new collection
         if (collection != null)
         {
-          collection.CollectionChanged -= TheCollectionChanged;
+          _currentCollection = collection;
           collection.CollectionChanged += TheCollectionChanged;
         }
       }
@@ -96,18 +112,28 @@ namespace EQLogParser
 
     private void TheCollectionChanged(object sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
-      if (!_updateTimer.IsEnabled)
+      _batchRefresh.Invoke();
+    }
+
+    private void RefreshGrid()
+    {
+      Dispatcher.InvokeAsync(() =>
       {
-        _updateTimer.Start();
-      }
+        var colDescriptions = dataGrid.SortColumnDescriptions;
+        if (colDescriptions.Count != 1 || colDescriptions[0].ColumnName != "BeginTime" ||
+            colDescriptions[0].SortDirection != ListSortDirection.Descending)
+        {
+          dataGrid.SortColumnDescriptions.Clear();
+          dataGrid.SortColumnDescriptions.Add(new SortColumnDescription
+          { ColumnName = "BeginTime", SortDirection = ListSortDirection.Descending });
+          dataGrid?.View?.Refresh();
+        }
+      });
     }
 
     private void ClearClick(object sender, RoutedEventArgs e)
     {
-      if (_triggerLogs?.Count > 0)
-      {
-        _triggerLogs.ForEach(l => l.Clear());
-      }
+      TriggerLogManager.Instance.ClearAll();
     }
 
     private new void PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -131,7 +157,17 @@ namespace EQLogParser
 
     public void HideContent()
     {
-      // do nothing
+      TriggerManager.Instance.EventsProcessorsUpdated -= EventsProcessorsUpdated;
+      ThemeConfig.EventsThemeChanged -= EventsThemeChanged;
+
+      // Unsubscribe from current collection to prevent memory leaks
+      if (_currentCollection != null)
+      {
+        _currentCollection.CollectionChanged -= TheCollectionChanged;
+        _currentCollection = null;
+      }
+
+      _ready = false;
     }
 
     private void AutoGeneratingColumn(object sender, AutoGeneratingColumnArgs e)
@@ -147,11 +183,11 @@ namespace EQLogParser
         };
         e.Column.TextAlignment = TextAlignment.Center;
         e.Column.HeaderText = mapping == "BeginTime" ? "Event Time" : "Log Time";
-        e.Column.Width = MainActions.CurrentDateTimeWidth;
+        e.Column.Width = ThemeConfig.CurrentDateTimeWidth;
       }
       else if (mapping == "Name")
       {
-        e.Column.Width = MainActions.CurrentNameWidth;
+        e.Column.Width = ThemeConfig.CurrentNameWidth;
       }
       else if (mapping == "Eval")
       {
@@ -162,7 +198,7 @@ namespace EQLogParser
           HeaderText = "Eval (μs)",
           NumberDecimalDigits = 0,
           NumberGroupSizes = [3],
-          Width = MainActions.CurrentMediumWidth
+          Width = ThemeConfig.CurrentMediumWidth
         };
       }
       else if (mapping == "Priority")
@@ -174,7 +210,7 @@ namespace EQLogParser
           HeaderText = mapping,
           NumberDecimalDigits = 0,
           NumberGroupSizes = [3],
-          Width = MainActions.CurrentMediumWidth
+          Width = ThemeConfig.CurrentMediumWidth
         };
       }
       else if (mapping == "Line")

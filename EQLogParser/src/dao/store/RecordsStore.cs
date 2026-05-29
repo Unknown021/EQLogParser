@@ -1,10 +1,8 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading;
-using System.Windows.Data;
 
 namespace EQLogParser
 {
@@ -29,9 +27,7 @@ namespace EQLogParser
     private readonly ConcurrentDictionary<string, bool> _recordNeedsEvent = new();
     private readonly Dictionary<string, NpcResistStats> _npcSpellStatsDict = [];
     private readonly List<RecordList> _playerAmbiguityCastCache = [];
-    // observables
-    private readonly object _collectionLock = new();
-    internal readonly ObservableCollection<QuickShareRecord> AllQuickShareRecords = [];
+    private readonly ConcurrentDictionary<string, List<CachedCast>> _spellNameIndex = new();
     private readonly Timer _eventTimer;
 
     private static readonly string[] TimedRecordTypes =
@@ -50,7 +46,6 @@ namespace EQLogParser
 
     private RecordsStore()
     {
-      BindingOperations.EnableCollectionSynchronization(AllQuickShareRecords, _collectionLock);
       LifecycleManager.Register(this);
 
       // initialize dictionaries
@@ -105,10 +100,14 @@ namespace EQLogParser
         _playerAmbiguityCastCache.Clear();
       }
 
-      lock (_collectionLock)
+      foreach (var list in _spellNameIndex.Values)
       {
-        AllQuickShareRecords.Clear();
+        lock (list)
+        {
+          list.Clear();
+        }
       }
+      _spellNameIndex.Clear();
 
       lock (_npcSpellStatsDict)
       {
@@ -181,20 +180,17 @@ namespace EQLogParser
       lock (_playerAmbiguityCastCache)
       {
         Add(_playerAmbiguityCastCache, spell, beginTime);
-      }
-    }
-
-    internal void Add(QuickShareRecord action)
-    {
-      lock (_collectionLock)
-      {
-        if (AllQuickShareRecords.Count == 0 || AllQuickShareRecords[0].Key != action.Key ||
-          !AllQuickShareRecords[0].BeginTime.Equals(action.BeginTime))
+        if (string.IsNullOrEmpty(spell.Spell)) return;
+        var cached = new CachedCast(beginTime, spell);
+        var list = _spellNameIndex.GetOrAdd(spell.Spell, _ => []);
+        lock (list)
         {
-          AllQuickShareRecords.Insert(0, action);
+          list.Add(cached);
         }
       }
     }
+
+
 
     internal IEnumerable<NpcResistStats> GetAllNpcResistStats()
     {
@@ -210,34 +206,28 @@ namespace EQLogParser
       }
     }
 
-    internal IEnumerable<(double, SpellCast)> GetSpellsLast(double duration)
+    internal List<CachedCast> GetCastsBySpellName(string spellName, double duration)
     {
-      lock (_playerAmbiguityCastCache)
+      if (!_spellNameIndex.TryGetValue(spellName, out var list))
       {
-        var end = _playerAmbiguityCastCache.Count - 1;
+        return [];
+      }
 
-        if (end <= -1)
-        {
-          yield break;
-        }
+      var end = _playerAmbiguityCastCache.Count - 1;
+      if (end <= -1) return [];
 
-        var endTime = _playerAmbiguityCastCache[end].BeginTime - duration;
-        for (var i = end; i >= 0 && _playerAmbiguityCastCache[i].BeginTime >= endTime; i--)
+      var endTime = _playerAmbiguityCastCache[end].BeginTime - duration;
+      lock (list)
+      {
+        var result = new List<CachedCast>(list.Count);
+        for (var i = list.Count - 1; i >= 0; i--)
         {
-          var list = _playerAmbiguityCastCache[i];
-          for (var j = list.Records.Count - 1; j >= 0; j--)
+          if (list[i].BeginTime >= endTime)
           {
-            yield return (list.BeginTime, (SpellCast)list.Records[j]);
+            result.Add(list[i]);
           }
         }
-      }
-    }
-
-    internal bool IsQuickShareMine(string key)
-    {
-      lock (_collectionLock)
-      {
-        return AllQuickShareRecords.FirstOrDefault(share => share.IsMine && share.Key == key) != null;
+        return result;
       }
     }
 
@@ -463,6 +453,13 @@ namespace EQLogParser
     {
       public double BeginTime { get; init; }
       public List<object> Records { get; init; }
+    }
+
+    internal readonly struct CachedCast
+    {
+      public readonly double BeginTime;
+      public readonly SpellCast Cast;
+      internal CachedCast(double beginTime, SpellCast cast) { BeginTime = beginTime; Cast = cast; }
     }
   }
 }

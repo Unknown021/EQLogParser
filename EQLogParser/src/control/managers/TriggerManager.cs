@@ -1,35 +1,34 @@
-﻿using System;
+﻿using log4net;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Threading;
 
 namespace EQLogParser
 {
-  internal class TriggerManager
+  internal class TriggerManager : IDisposable
   {
-    internal event Action<List<TriggerLogStore>> EventsProcessorsUpdated;
+    internal event Action EventsProcessorsUpdated;
     internal event Action<bool> EventsUpdatingTriggers;
     internal event Action<TriggerLogEntry> EventsSelectTrigger;
     internal static TriggerManager Instance => Lazy.Value;
 
     private static readonly Lazy<TriggerManager> Lazy = new(() => new TriggerManager());
-    private readonly DispatcherTimer _configUpdateTimer;
-    private readonly DispatcherTimer _triggerUpdateTimer;
+    private static readonly ILog Log = LogManager.GetLogger(typeof(TriggerManager));
+    private static readonly TimeSpan DebounceTime = TimeSpan.FromMilliseconds(750);
     private readonly List<LogReader> _logReaders = [];
     private readonly SemaphoreSlim _logReadersSemaphore = new(1, 1);
+    private readonly object _updateLock = new();
+    private DelayedAction _configUpdate;
+    private DelayedAction _timerUpdate;
     private TriggerProcessor _testProcessor;
+    private volatile bool _isDisposed;
 
     public TriggerManager()
     {
-      _configUpdateTimer = UiUtil.CreateTimer(ConfigDoUpdate, 500, false);
-      _triggerUpdateTimer = UiUtil.CreateTimer(TriggersDoUpdate, 1000, false);
-      TriggerStateDB.Instance.OverlayImportEvent += OverlayImportEvent;
-      TriggerStateDB.Instance.TriggerConfigUpdateEvent += TriggerConfigUpdateEvent;
-      TriggerStateDB.Instance.TriggerUpdateEvent += TriggerUpdateEvent;
-      TriggerStateDB.Instance.TriggerImportEvent += TriggerImportEvent;
+
     }
 
     internal void Select(TriggerLogEntry entry) => EventsSelectTrigger?.Invoke(entry);
@@ -37,32 +36,19 @@ namespace EQLogParser
     internal void TriggersUpdated()
     {
       EventsUpdatingTriggers?.Invoke(true);
-      _triggerUpdateTimer.Stop();
-      _triggerUpdateTimer.Start();
+      lock (_updateLock) _timerUpdate?.Invoke(true);
     }
 
     internal async Task StartAsync()
     {
+      CreateTimers();
       await TriggerUtil.LoadOverlayStyles();
+      TriggerStateDB.Instance.OverlayImportEvent += OverlayImportEvent;
+      TriggerStateDB.Instance.TriggerConfigUpdateEvent += TriggerConfigUpdateEvent;
+      TriggerStateDB.Instance.TriggerUpdateEvent += TriggerUpdateEvent;
+      TriggerStateDB.Instance.TriggerImportEvent += TriggerImportEvent;
       MainActions.EventsLogLoadingComplete += TriggerManagerEventsLogLoadingComplete;
       TriggerConfigUpdateEvent(null);
-    }
-
-    internal async Task StopAsync()
-    {
-      MainActions.EventsLogLoadingComplete -= TriggerManagerEventsLogLoadingComplete;
-      await _logReadersSemaphore.WaitAsync();
-
-      try
-      {
-        _logReaders.ForEach(reader => reader.Dispose());
-        _logReaders.Clear();
-        await TriggerOverlayManager.Instance.RemoveAllAsync();
-      }
-      finally
-      {
-        _logReadersSemaphore.Release();
-      }
     }
 
     internal async Task StopTriggersAsync()
@@ -119,6 +105,34 @@ namespace EQLogParser
     // in case of merge
     private void TriggerImportEvent(bool _) => TriggersUpdated();
 
+    private void CreateTimers()
+    {
+      RemoveTimers();
+      lock (_updateLock)
+      {
+        _configUpdate = new(DebounceTime, () => ConfigDoUpdate());
+        _timerUpdate = new(DebounceTime, () => TriggersDoUpdate());
+      }
+    }
+
+    private void RemoveTimers()
+    {
+      try
+      {
+        lock (_updateLock)
+        {
+          _configUpdate?.Dispose();
+          _timerUpdate?.Dispose();
+          _configUpdate = null;
+          _timerUpdate = null;
+        }
+      }
+      catch (Exception)
+      {
+        // ignore dispose errors
+      }
+    }
+
     private async void TriggerUpdateEvent(TriggerNode node)
     {
       // reload triggers if current one is enabled by anyone
@@ -132,14 +146,13 @@ namespace EQLogParser
     {
       if (await TriggerStateDB.Instance.GetConfig() is { IsAdvanced: false })
       {
-        ConfigDoUpdate(this, null);
+        TriggerConfigUpdateEvent(null);
       }
     }
 
     private void TriggerConfigUpdateEvent(TriggerConfig _)
     {
-      _configUpdateTimer.Stop();
-      _configUpdateTimer.Start();
+      lock (_updateLock) _configUpdate?.Invoke(true);
     }
 
     private async Task InitTestProcessor(string id, string name, string playerName, string voice, int voiceRate,
@@ -157,10 +170,20 @@ namespace EQLogParser
       await FireEventsProcessorsUpdatedAsync();
     }
 
-    private async void ConfigDoUpdate(object sender, EventArgs e)
+    private async void ConfigDoUpdate()
     {
-      _configUpdateTimer.Stop();
+      try
+      {
+        await ConfigDoUpdateWorkAsync();
+      }
+      catch (Exception ex)
+      {
+        Log.Error($"Error in ConfigDoUpdate: {ex}");
+      }
+    }
 
+    private async Task ConfigDoUpdateWorkAsync()
+    {
       if (await TriggerStateDB.Instance.GetConfig() is { } config)
       {
         await _logReadersSemaphore.WaitAsync();
@@ -290,10 +313,20 @@ namespace EQLogParser
       }
     }
 
-    private async void TriggersDoUpdate(object sender, EventArgs e)
+    private async void TriggersDoUpdate()
     {
-      _triggerUpdateTimer.Stop();
+      try
+      {
+        await TriggersDoUpdateWorkAsync();
+      }
+      catch (Exception ex)
+      {
+        Log.Error($"Error in TriggersDoUpdate: {ex}");
+      }
+    }
 
+    private async Task TriggersDoUpdateWorkAsync()
+    {
       await Task.Run(async () =>
       {
         var idSet = new HashSet<string>();
@@ -321,12 +354,20 @@ namespace EQLogParser
     {
       await Task.Run(async () =>
       {
+        var processors = await GetProcessorsAsync();
+        var processorNames = new HashSet<string>(processors.Select(p => p.CurrentProcessorName));
+        TriggerLogManager.Instance.SetActiveProcessors(processorNames);
+
+        // If no active processors, clear trigger logs
+        if (processorNames.Count == 0)
+        {
+          TriggerLogManager.Instance.ClearAllOnDisable();
+        }
+
         var idSet = new HashSet<string>();
         var triggerSet = new HashSet<string>();
-        var triggerLogs = new List<TriggerLogStore>();
-        foreach (var processor in await GetProcessorsAsync())
+        foreach (var processor in processors)
         {
-          triggerLogs.Add(processor.TriggerLog);
           foreach (var id in processor.GetRequiredOverlayIds())
           {
             idSet.Add(id);
@@ -339,7 +380,7 @@ namespace EQLogParser
         }
 
         await TriggerOverlayManager.Instance.UpdateOverlayInfoAsync(idSet, triggerSet);
-        EventsProcessorsUpdated?.Invoke(triggerLogs);
+        EventsProcessorsUpdated?.Invoke();
       });
     }
 
@@ -352,6 +393,35 @@ namespace EQLogParser
         var list = _logReaders.Select(reader => reader.GetProcessor()).OfType<TriggerProcessor>().ToList();
         if (_testProcessor != null) list.Add(_testProcessor);
         return list;
+      }
+      finally
+      {
+        _logReadersSemaphore.Release();
+      }
+    }
+
+    public void Dispose()
+    {
+      DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+      if (_isDisposed) return;
+      _isDisposed = true;
+      RemoveTimers();
+      TriggerStateDB.Instance.OverlayImportEvent -= OverlayImportEvent;
+      TriggerStateDB.Instance.TriggerConfigUpdateEvent -= TriggerConfigUpdateEvent;
+      TriggerStateDB.Instance.TriggerUpdateEvent -= TriggerUpdateEvent;
+      TriggerStateDB.Instance.TriggerImportEvent -= TriggerImportEvent;
+      MainActions.EventsLogLoadingComplete -= TriggerManagerEventsLogLoadingComplete;
+      await _logReadersSemaphore.WaitAsync();
+
+      try
+      {
+        _logReaders.ForEach(reader => reader.Dispose());
+        _logReaders.Clear();
+        await TriggerOverlayManager.Instance.RemoveAllAsync();
       }
       finally
       {

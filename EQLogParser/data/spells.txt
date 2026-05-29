@@ -29734,6 +29734,8 @@
 40695^Pet Illusion: Enchanted Lute^255^1200^1^0^38^0^0^0^0^0^0^0^0^1^0^You alter your pet.^^
 40696^Summon Familiar: Chromatic Songwing^255^0^1^0^6^0^0^0^0^0^0^0^0^1^1^Your familiar joins you.^ is joined by a familiar.^Your familiar wanders off.
 40697^Pet Illusion: Chromatic Songwing^255^1200^1^0^38^0^0^0^0^0^0^0^0^1^0^You alter your pet.^^
+40698^Summon Frostreaver Sabre-Tooth Cat Mount^255^7200^1^0^6^0^0^0^0^0^0^0^0^0^0^You summon a Frostreaver sabre-tooth cat mount.^ summons a Frostreaver sabre-tooth cat mount.^Your mount runs off into the distance.
+40699^Summon Lethar Penguin Mount^255^7200^1^0^6^0^0^0^0^0^0^0^0^0^0^You summon a Lethar penguin mount.^ summons a Lethar penguin mount.^Your mount runs off into the distance.
 407^Cast Sight^32^3900^1^0^5^65535^0^0^0^0^0^0^0^0^1^You cast your sight.^'s eyes gleam and then go dark.^Your casting ends.
 4070^Magi Ward^54^540^1^0^6^2048^0^0^0^0^4^0^0^1^1^A dark blue aura surrounds you.^ is surrounded in a dark blue aura.^The blue aura fades.
 40700^Cazic's Soul Crystal^255^0^1^0^5^0^0^0^0^0^0^0^0^0^0^^ is touched with the power of Cazic's soul.^
@@ -37569,12 +37571,12 @@
 490^Enveloping Roots^36^10^0^0^5^40^1^0^1^0^0^0^0^1^1^Your feet become entwined.^ becomes entwined in roots.^The roots fall from your feet.
 4900^Balance of the Nihil^65^15^0^0^5^512^0^0^1^0^0^0^0^1^1^Your body slows down.^'s body slows down.^Your are no longer slowed.
 49000^Dichotomic Shield^101^0^1^0^6^1^0^1^0^0^4^0^1^0^0^^^
-49001^Dichotomic Shielding 1^250^0^1^0^6^1^0^1^0^0^0^0^1^0^0^^^
-49002^Dichotomic Shielding 2^250^0^1^0^6^1^0^1^0^0^0^0^2^0^0^^^
-49003^Dichotomic Shielding 3^250^0^1^0^6^1^0^1^0^0^0^0^5^0^0^^^
-49004^Dichotomic Shielding 4^250^0^1^0^6^1^0^1^0^0^0^0^7^0^0^^^
-49005^Dichotomic Shielding 5^250^0^1^0^6^1^0^1^0^0^0^0^9^0^0^^^
-49006^Dichotomic Shielding 6^250^0^1^0^6^1^0^1^0^0^0^0^10^0^0^^^
+49001^Dichotomic Shielding Trigger 1^250^0^1^0^6^1^0^1^0^0^0^0^1^0^0^^^
+49002^Dichotomic Shielding Trigger 2^250^0^1^0^6^1^0^1^0^0^0^0^2^0^0^^^
+49003^Dichotomic Shielding Trigger 3^250^0^1^0^6^1^0^1^0^0^0^0^5^0^0^^^
+49004^Dichotomic Shielding Trigger 4^250^0^1^0^6^1^0^1^0^0^0^0^7^0^0^^^
+49005^Dichotomic Shielding Trigger 5^250^0^1^0^6^1^0^1^0^0^0^0^9^0^0^^^
+49006^Dichotomic Shielding Trigger 6^250^0^1^0^6^1^0^1^0^0^0^0^10^0^0^^^
 49007^Pain Doesn't Hurt^102^0^1^0^6^1^0^1^0^0^4^0^1^0^0^^^
 49008^Pain Doesn't Hurt Rk. II^102^0^1^0^6^1^0^1^0^0^4^0^5^0^0^^^
 49009^Pain Doesn't Hurt Rk. III^102^0^1^0^6^1^0^1^0^0^4^0^10^0^0^^^
@@ -37715,12 +37717,12 @@
 49130^Dichotomic Form 5^255^10^1^0^6^64^0^0^0^0^2^0^9^1^1^You embrace the dual nature of eternity.^ embraces the dual nature of eternity.^You end your contemplation of eternity.
 49131^Dichotomic Form 6^255^10^1^0^6^64^0^0^0^0^2^0^10^1^1^You embrace the dual nature of eternity.^ embraces the dual nature of eternity.^You end your contemplation of eternity.
 49132^Dichotomic Form^101^0^1^0^6^64^0^1^0^0^4^0^1^0^0^^^
-49133^Dichotomic Form 1^250^0^1^0^6^64^0^1^0^0^0^0^1^0^0^^^
-49134^Dichotomic Form 2^250^0^1^0^6^64^0^1^0^0^0^0^2^0^0^^^
-49135^Dichotomic Form 3^250^0^1^0^6^64^0^1^0^0^0^0^5^0^0^^^
-49136^Dichotomic Form 4^250^0^1^0^6^64^0^1^0^0^0^0^7^0^0^^^
-49137^Dichotomic Form 5^250^0^1^0^6^64^0^1^0^0^0^0^9^0^0^^^
-49138^Dichotomic Form 6^250^0^1^0^6^64^0^1^0^0^0^0^10^0^0^^^
+49133^Dichotomic Form Trigger 1^250^0^1^0^6^64^0^1^0^0^0^0^1^0^0^^^
+49134^Dichotomic Form Trigger 2^250^0^1^0^6^64^0^1^0^0^0^0^2^0^0^^^
+49135^Dichotomic Form Trigger 3^250^0^1^0^6^64^0^1^0^0^0^0^5^0^0^^^
+49136^Dichotomic Form Trigger 4^250^0^1^0^6^64^0^1^0^0^0^0^7^0^0^^^
+49137^Dichotomic Form Trigger 5^250^0^1^0^6^64^0^1^0^0^0^0^9^0^0^^^
+49138^Dichotomic Form Trigger 6^250^0^1^0^6^64^0^1^0^0^0^0^10^0^0^^^
 49139^Curse of the Thirteen Fingers^103^0^0^0^5^64^0^1^0^0^4^0^1^0^0^^^
 49140^Curse of the Thirteen Fingers Rk. II^103^0^0^0^5^64^0^1^0^0^4^0^5^0^0^^^
 49141^Curse of the Thirteen Fingers Rk. III^103^0^0^0^5^64^0^1^0^0^4^0^10^0^0^^^
@@ -37756,12 +37758,12 @@
 49171^Dichotomic Weapon Effect 2^255^10^1^0^6^256^0^0^0^0^2^0^2^0^0^^^
 49172^Dichotomic Weapon Effect 3^255^10^1^0^6^256^0^0^0^0^2^0^5^0^0^^^
 49173^Dichotomic Weapons^101^0^1^0^6^256^0^1^0^0^0^0^1^0^0^^^
-49174^Dichotomic Weapon Effect 1^250^0^1^0^6^256^0^1^0^0^0^0^1^0^0^^^
-49175^Dichotomic Weapon Effect 2^250^0^1^0^6^256^0^1^0^0^0^0^2^0^0^^^
-49176^Dichotomic Weapon Effect 3^250^0^1^0^6^256^0^1^0^0^0^0^5^0^0^^^
-49177^Dichotomic Weapon Effect 4^250^0^1^0^6^256^0^1^0^0^0^0^7^0^0^^^
-49178^Dichotomic Weapon Effect 5^250^0^1^0^6^256^0^1^0^0^0^0^9^0^0^^^
-49179^Dichotomic Weapon Effect 6^250^0^1^0^6^256^0^1^0^0^0^0^10^0^0^^^
+49174^Dichotomic Weapon Trigger 1^250^0^1^0^6^256^0^1^0^0^0^0^1^0^0^^^
+49175^Dichotomic Weapon Trigger 2^250^0^1^0^6^256^0^1^0^0^0^0^2^0^0^^^
+49176^Dichotomic Weapon Trigger 3^250^0^1^0^6^256^0^1^0^0^0^0^5^0^0^^^
+49177^Dichotomic Weapon Trigger 4^250^0^1^0^6^256^0^1^0^0^0^0^7^0^0^^^
+49178^Dichotomic Weapon Trigger 5^250^0^1^0^6^256^0^1^0^0^0^0^9^0^0^^^
+49179^Dichotomic Weapon Trigger 6^250^0^1^0^6^256^0^1^0^0^0^0^10^0^0^^^
 49180^Shrouding Speed Discipline^102^5^1^0^6^256^0^1^0^0^2^0^1^1^1^Your hands speed up.^'s hands speed up.^Your hands slow down.
 49181^Shrouding Speed Discipline Rk. II^102^5^1^0^6^256^0^1^0^0^2^0^5^1^1^Your hands speed up.^'s hands speed up.^Your hands slow down.
 49182^Shrouding Speed Discipline Rk. III^102^5^1^0^6^256^0^1^0^0^2^0^10^1^1^Your hands speed up.^'s hands speed up.^Your hands slow down.
@@ -46354,12 +46356,12 @@
 57785^Maggot Spray^255^3^0^0^42^0^1^1^0^0^0^0^0^0^0^Maggots cover your body.^ spews maggots.^The maggots fall off.
 578^Sight^19^66^1^0^6^2048^0^0^0^0^0^0^0^1^1^Your eyes feel stronger.^'s eyes gleam.^Your vision fades.
 57800^Dissident Shield^106^0^1^0^6^1^0^1^0^0^4^0^1^0^0^^^
-57801^Dissident Shielding 1^250^0^1^0^6^1^0^1^0^0^0^0^1^0^0^^^
-57802^Dissident Shielding 2^250^0^1^0^6^1^0^1^0^0^0^0^2^0^0^^^
-57803^Dissident Shielding 3^250^0^1^0^6^1^0^1^0^0^0^0^5^0^0^^^
-57804^Dissident Shielding 4^250^0^1^0^6^1^0^1^0^0^0^0^7^0^0^^^
-57805^Dissident Shielding 5^250^0^1^0^6^1^0^1^0^0^0^0^9^0^0^^^
-57806^Dissident Shielding 6^250^0^1^0^6^1^0^1^0^0^0^0^10^0^0^^^
+57801^Dissident Shielding Trigger 1^250^0^1^0^6^1^0^1^0^0^0^0^1^0^0^^^
+57802^Dissident Shielding Trigger 2^250^0^1^0^6^1^0^1^0^0^0^0^2^0^0^^^
+57803^Dissident Shielding Trigger 3^250^0^1^0^6^1^0^1^0^0^0^0^5^0^0^^^
+57804^Dissident Shielding Trigger 4^250^0^1^0^6^1^0^1^0^0^0^0^7^0^0^^^
+57805^Dissident Shielding Trigger 5^250^0^1^0^6^1^0^1^0^0^0^0^9^0^0^^^
+57806^Dissident Shielding Trigger 6^250^0^1^0^6^1^0^1^0^0^0^0^10^0^0^^^
 57807^Dissident Shielding 1^255^10^1^600^6^1^0^0^0^0^4^0^1^1^1^A shield shimmers in your vision.^ shimmers under a protective shield.^Your shimmering shield dissipates.
 57808^Dissident Shielding 2^255^10^1^600^6^1^0^0^0^0^4^0^2^1^1^A shield shimmers in your vision.^ shimmers under a protective shield.^Your shimmering shield dissipates.
 57809^Dissident Shielding 3^255^10^1^600^6^1^0^0^0^0^4^0^5^1^1^A shield shimmers in your vision.^ shimmers under a protective shield.^Your shimmering shield dissipates.
@@ -49480,13 +49482,13 @@
 61002^Shield Splinter Rk. III^115^0^0^0^5^1^0^1^0^0^0^0^10^1^1^Your shield is ruined.^'s shield is ruined.^
 61003^Bracing Stance VI^255^4^1^2^6^1^0^0^0^0^4^0^0^1^0^You brace yourself.^^
 61004^Composite Shield^111^0^1^0^6^1^0^1^0^0^4^0^0^0^0^^^
-61005^Composite Shielding 1^250^0^1^0^6^1^0^1^0^0^0^0^1^0^0^^^
-61006^Composite Shielding 2^250^0^1^0^6^1^0^1^0^0^0^0^2^0^0^^^
-61007^Composite Shielding 3^250^0^1^0^6^1^0^1^0^0^0^0^5^0^0^^^
-61008^Composite Shielding 4^250^0^1^0^6^1^0^1^0^0^0^0^7^0^0^^^
-61009^Composite Shielding 5^250^0^1^0^6^1^0^1^0^0^0^0^9^0^0^^^
+61005^Composite Shielding Trigger 1^250^0^1^0^6^1^0^1^0^0^0^0^1^0^0^^^
+61006^Composite Shielding Trigger 2^250^0^1^0^6^1^0^1^0^0^0^0^2^0^0^^^
+61007^Composite Shielding Trigger 3^250^0^1^0^6^1^0^1^0^0^0^0^5^0^0^^^
+61008^Composite Shielding Trigger 4^250^0^1^0^6^1^0^1^0^0^0^0^7^0^0^^^
+61009^Composite Shielding Trigger 5^250^0^1^0^6^1^0^1^0^0^0^0^9^0^0^^^
 6101^Spirit of Irionu Strike^255^0^0^0^5^0^1^0^3^0^0^0^0^1^1^You are encased in frost.^ is encased in frost.^
-61010^Composite Shielding 6^250^0^1^0^6^1^0^1^0^0^0^0^10^0^0^^^
+61010^Composite Shielding Trigger 6^250^0^1^0^6^1^0^1^0^0^0^0^10^0^0^^^
 61011^Composite Shielding 1^255^10^1^600^6^1^0^0^0^0^4^0^1^1^1^A shield shimmers in your vision.^ shimmers under a protective shield.^Your shimmering shield dissipates.
 61012^Composite Shielding 2^255^10^1^600^6^1^0^0^0^0^4^0^2^1^1^A shield shimmers in your vision.^ shimmers under a protective shield.^Your shimmering shield dissipates.
 61013^Composite Shielding 3^255^10^1^600^6^1^0^0^0^0^4^0^5^1^1^A shield shimmers in your vision.^ shimmers under a protective shield.^Your shimmering shield dissipates.
@@ -51900,6 +51902,7 @@
 63321^Cruor's Malady^117^2^0^0^5^512^1^0^5^0^0^0^1^1^1^Your veins fill with a fast-acting disease.^ succumbs to a fast-acting disease.^The disease leaves your blood.
 63322^Cruor's Malady Rk. II^117^2^0^0^5^512^1^0^5^0^0^0^5^1^1^Your veins fill with a fast-acting disease.^ succumbs to a fast-acting disease.^The disease leaves your blood.
 63323^Cruor's Malady Rk. III^117^2^0^0^5^512^1^0^5^0^0^0^10^1^1^Your veins fill with a fast-acting disease.^ succumbs to a fast-acting disease.^The disease leaves your blood.
+63327^Infected Magic^255^2^0^0^5^0^1^0^0^0^0^0^0^0^0^Magic seeps into you, infecting your power.^^The infected magic fades from your body.
 63328^Anti-Antivenin^255^6^0^0^5^0^-1^0^0^0^0^0^0^0^0^You feel powerful negative energy enter you.^^The negative energy fades.
 63329^Malicious Venom^255^0^0^0^2^0^1^0^0^0^0^0^0^0^0^Malicious venom flies from an ally and invades your body.^^
 6333^Chaotic Strike IV^255^0^0^0^5^0^1^0^1^0^0^0^0^1^1^Your world spins around you.^ staggers painfully.^
@@ -52943,12 +52946,12 @@
 650^Mist^10^540^1^0^5^8192^0^0^0^0^4^0^0^1^1^Your image blurs.^'s image blurs.^You come into focus.
 6500^Stunning Strike^255^0^0^0^5^0^1^0^1^0^0^0^0^0^0^You stagger from the stunning strike.^ staggers from the stunning strike.^
 65000^Ecliptic Shield^116^0^1^0^6^1^0^1^0^0^4^0^0^0^0^^^
-65001^Ecliptic Shielding 1^250^0^1^0^6^1^0^1^0^0^0^0^1^0^0^^^
-65002^Ecliptic Shielding 2^250^0^1^0^6^1^0^1^0^0^0^0^2^0^0^^^
-65003^Ecliptic Shielding 3^250^0^1^0^6^1^0^1^0^0^0^0^5^0^0^^^
-65004^Ecliptic Shielding 4^250^0^1^0^6^1^0^1^0^0^0^0^7^0^0^^^
-65005^Ecliptic Shielding 5^250^0^1^0^6^1^0^1^0^0^0^0^9^0^0^^^
-65006^Ecliptic Shielding 6^250^0^1^0^6^1^0^1^0^0^0^0^10^0^0^^^
+65001^Ecliptic Shielding Trigger 1^250^0^1^0^6^1^0^1^0^0^0^0^1^0^0^^^
+65002^Ecliptic Shielding Trigger 2^250^0^1^0^6^1^0^1^0^0^0^0^2^0^0^^^
+65003^Ecliptic Shielding Trigger 3^250^0^1^0^6^1^0^1^0^0^0^0^5^0^0^^^
+65004^Ecliptic Shielding Trigger 4^250^0^1^0^6^1^0^1^0^0^0^0^7^0^0^^^
+65005^Ecliptic Shielding Trigger 5^250^0^1^0^6^1^0^1^0^0^0^0^9^0^0^^^
+65006^Ecliptic Shielding Trigger 6^250^0^1^0^6^1^0^1^0^0^0^0^10^0^0^^^
 65007^Ecliptic Shielding 1^255^10^1^600^6^1^0^0^0^0^4^0^1^1^1^A shield shimmers in your vision.^ shimmers under a protective shield.^Your shimmering shield dissipates.
 65008^Ecliptic Shielding 2^255^10^1^600^6^1^0^0^0^0^4^0^2^1^1^A shield shimmers in your vision.^ shimmers under a protective shield.^Your shimmering shield dissipates.
 65009^Ecliptic Shielding 3^255^10^1^600^6^1^0^0^0^0^4^0^5^1^1^A shield shimmers in your vision.^ shimmers under a protective shield.^Your shimmering shield dissipates.
@@ -57728,13 +57731,13 @@
 70002^Shield Split Rk. III^125^0^0^0^5^1^0^1^0^0^0^0^10^1^1^Your shield is ruined.^'s shield is ruined.^
 70003^Bracing Stance VIII^255^4^1^2^6^1^0^0^0^0^4^0^0^1^0^You brace yourself.^^
 70004^Reciprocal Shield^121^0^1^0^6^1^0^1^0^0^4^0^0^0^0^^^
-70005^Reciprocal Shielding 1^250^0^1^0^6^1^0^1^0^0^0^0^1^0^0^^^
-70006^Reciprocal Shielding 2^250^0^1^0^6^1^0^1^0^0^0^0^2^0^0^^^
-70007^Reciprocal Shielding 3^250^0^1^0^6^1^0^1^0^0^0^0^4^0^0^^^
-70008^Reciprocal Shielding 4^250^0^1^0^6^1^0^1^0^0^0^0^6^0^0^^^
-70009^Reciprocal Shielding 5^250^0^1^0^6^1^0^1^0^0^0^0^8^0^0^^^
+70005^Reciprocal Shielding Trigger 1^250^0^1^0^6^1^0^1^0^0^0^0^1^0^0^^^
+70006^Reciprocal Shielding Trigger 2^250^0^1^0^6^1^0^1^0^0^0^0^2^0^0^^^
+70007^Reciprocal Shielding Trigger 3^250^0^1^0^6^1^0^1^0^0^0^0^4^0^0^^^
+70008^Reciprocal Shielding Trigger 4^250^0^1^0^6^1^0^1^0^0^0^0^6^0^0^^^
+70009^Reciprocal Shielding Trigger 5^250^0^1^0^6^1^0^1^0^0^0^0^8^0^0^^^
 7001^Angstlich's Echo of Terror^62^2^0^0^4^128^0^0^1^0^0^0^0^1^1^You flee in panic.^ flees in panic.^You are no longer afraid.
-70010^Reciprocal Shielding 6^250^0^1^0^6^1^0^1^0^0^0^0^10^0^0^^^
+70010^Reciprocal Shielding Trigger 6^250^0^1^0^6^1^0^1^0^0^0^0^10^0^0^^^
 70011^Reciprocal Shielding 1^255^10^1^600^6^1^0^0^0^0^4^0^1^1^1^A shield shimmers in your vision.^ shimmers under a protective shield.^Your shimmering shield dissipates.
 70012^Reciprocal Shielding 2^255^10^1^600^6^1^0^0^0^0^4^0^2^1^1^A shield shimmers in your vision.^ shimmers under a protective shield.^Your shimmering shield dissipates.
 70013^Reciprocal Shielding 3^255^10^1^600^6^1^0^0^0^0^4^0^4^1^1^A shield shimmers in your vision.^ shimmers under a protective shield.^Your shimmering shield dissipates.

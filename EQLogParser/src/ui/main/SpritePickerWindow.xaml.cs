@@ -23,7 +23,7 @@ namespace EQLogParser
 
     internal SpritePickerWindow(string characterId, string currentEqUiFolder)
     {
-      MainActions.SetCurrentTheme(this);
+      ThemeConfig.SetCurrentTheme(this);
       InitializeComponent();
       Owner = MainActions.GetOwner();
 
@@ -35,7 +35,7 @@ namespace EQLogParser
       else
       {
         // else find uifiles to use
-        EqUtil.GetEqUiFolderAsync(characterId).ContinueWith(t =>
+        EQUtil.GetEqUiFolderAsync(characterId).ContinueWith(t =>
         {
           Dispatcher.InvokeAsync(() => LoadDefaultSheets(t.Result));
         });

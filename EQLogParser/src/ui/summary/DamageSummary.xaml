@@ -47,7 +47,7 @@
           <numberformat:NumberFormatInfo NumberDecimalDigits="0" />
         </syncfusion:UpDown.NumberFormatInfo>
       </syncfusion:UpDown>
-      <ComboBox Margin="0,0,8,2" x:Name="rosterSelector" Visibility="Collapsed" SelectionChanged="RosterSelectionChanged" />
+      <ComboBox Margin="0,0,8,2" x:Name="rosterSelector" Padding="4,0,4,0" Visibility="Collapsed" SelectionChanged="RosterSelectionChanged" IsEnabled="False" />
       <ComboBox Margin="0,0,8,2" x:Name="petOrPlayerList" SelectionChanged="ListSelectionChanged" />
       <ComboBox Margin="0,0,8,2" x:Name="classesList" 
                 DropDownClosed="ClassSelectionChanged" ItemTemplateSelector="{StaticResource ComboBoxSelector}">
@@ -142,6 +142,11 @@
             <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="200" Margin="0" Padding="0">
               <StackPanel x:Name="menuItemPetOptions" Margin="0" />
             </ScrollViewer>
+          </MenuItem>
+          <MenuItem x:Name="menuItemSetAsPlayer" IsEnabled="False" Header="Set as Verified Player" Click="SetAsPlayerClick">
+            <MenuItem.Icon>
+              <fa:ImageAwesome Style="{StaticResource EQIconStyle}" Icon="Solid_User" />
+            </MenuItem.Icon>
           </MenuItem>
           <MenuItem x:Name="menuItemSetPlayerClass" IsEnabled="False" Header="Assign Default Class for Unknown">
             <MenuItem.Icon>

@@ -19,18 +19,18 @@ namespace EQLogParser
 
     public QuickShareWindow()
     {
-      MainActions.SetCurrentTheme(this);
+      ThemeConfig.SetCurrentTheme(this);
       InitializeComponent();
       Owner = MainActions.GetOwner();
-      QuickShareData = RecordsStore.Instance.AllQuickShareRecords;
+      QuickShareData = QuickShareManager.Instance.Records;
       QuickShareData.CollectionChanged += EnableStats;
       DataContext = this;
 
-      TriggerStateDB.Instance.GetTrustedPlayers().ContinueWith(task =>
+      TriggerStateDB.Instance.GetTrustedPlayers().ContinueWith(async task =>
       {
         if (task.Result != null)
         {
-          Dispatcher.Invoke(() =>
+          await UiUtil.InvokeAsync(() =>
           {
             foreach (var item in task.Result)
             {
@@ -50,7 +50,7 @@ namespace EQLogParser
       // enable stats
       EnableStats(null, null);
       trustGrid.ItemsSource = _items;
-      MainActions.EventsThemeChanged += EventsThemeChanged;
+      ThemeConfig.EventsThemeChanged += EventsThemeChanged;
       watchQuickShare.IsChecked = ConfigUtil.IfSet("TriggersWatchForQuickShare");
     }
 
@@ -61,7 +61,7 @@ namespace EQLogParser
     private void EnableStats(object sender, NotifyCollectionChangedEventArgs e)
     {
       // collection updated in RecordManager often from trigger processing Task
-      Dispatcher.Invoke(() =>
+      _ = UiUtil.InvokeAsync(() =>
       {
         statsButton.IsEnabled = QuickShareData.Count > 0;
       });
@@ -123,7 +123,7 @@ namespace EQLogParser
     private void TheWindowClosing(object sender, CancelEventArgs e)
     {
       QuickShareData.CollectionChanged -= EnableStats;
-      MainActions.EventsThemeChanged -= EventsThemeChanged;
+      ThemeConfig.EventsThemeChanged -= EventsThemeChanged;
 
       try
       {
@@ -173,7 +173,7 @@ namespace EQLogParser
         };
         e.Column.TextAlignment = TextAlignment.Center;
         e.Column.HeaderText = "Share Time";
-        e.Column.Width = MainActions.CurrentDateTimeWidth;
+        e.Column.Width = ThemeConfig.CurrentDateTimeWidth;
       }
       else if (mapping == "Type")
       {
@@ -183,7 +183,7 @@ namespace EQLogParser
       else if (mapping == "Key")
       {
         e.Column.HeaderText = "Share Key";
-        e.Column.Width = MainActions.CurrentSpellWidth;
+        e.Column.Width = ThemeConfig.CurrentSpellWidth;
       }
       else if (mapping == "IsMine")
       {
@@ -228,15 +228,5 @@ namespace EQLogParser
         }
       }
     }
-  }
-
-  public class QuickShareRecord
-  {
-    public double BeginTime { get; set; }
-    public string Type { get; set; }
-    public string To { get; set; }
-    public string From { get; set; }
-    public string Key { get; set; }
-    public bool IsMine { get; set; }
   }
 }

@@ -222,7 +222,7 @@ namespace EQLogParser
           Application.Current.Resources["OverlayHorizontalAlignment-" + toModel.Node.Id] = (HorizontalAlignment)toModel.HorizontalAlignment;
           // make sure old default data is no longer set (should be fixed during startup)
           Application.Current.Resources["OverlayVerticalAlignment-" + toModel.Node.Id] = (VerticalAlignment)toModel.VerticalAlignment;
-          Application.Current.Resources["OverlayTextEffect-" + toModel.Node.Id] = toModel.UseTextDropShadow ? MainActions.OverlayTextEffect : null;
+          Application.Current.Resources["OverlayTextEffect-" + toModel.Node.Id] = toModel.UseTextDropShadow ? ThemeConfig.OverlayTextEffect : null;
 
           AssignBrushResource(toModel, fromOverlay, "OverlayColor", "OverlayBrush", "OverlayBrushColor");
           AssignBrushResource(toModel, fromOverlay, "FontColor", "FontBrush", "TimerBarFontColor");
@@ -261,7 +261,7 @@ namespace EQLogParser
           Application.Current.Resources["OverlayHorizontalAlignment-" + toTextModel.Node.Id] = (HorizontalAlignment)toTextModel.HorizontalAlignment;
           // make sure old default data is no longer set (should be fixed during startup)
           Application.Current.Resources["OverlayVerticalAlignment-" + toTextModel.Node.Id] = (VerticalAlignment)toTextModel.VerticalAlignment;
-          Application.Current.Resources["OverlayTextEffect-" + toTextModel.Node.Id] = toTextModel.UseTextDropShadow ? MainActions.OverlayTextEffect : null;
+          Application.Current.Resources["OverlayTextEffect-" + toTextModel.Node.Id] = toTextModel.UseTextDropShadow ? ThemeConfig.OverlayTextEffect : null;
 
           AssignBrushResource(toTextModel, fromOverlay, "OverlayColor", "OverlayBrush", "OverlayBrushColor");
           AssignBrushResource(toTextModel, fromOverlay, "FontColor", "FontBrush", "TextOverlayFontColor");
@@ -659,18 +659,18 @@ namespace EQLogParser
         BeginTime = dateTime,
         Key = fullKey,
         From = chatType.Sender,
-        To = (to == "You" && processorName != null && characterId != TriggerStateDB.DefaultUser) ? processorName : TextUtils.ToUpper(to),
+        To = (to == "You" && processorName != null && characterId != TriggerStateDB.DefaultUser) ? processorName : TextUtils.CapitalizeFirst(to),
         IsMine = chatType.SenderIsYou,
         Type = type
       };
 
-      RecordsStore.Instance.Add(record);
+      QuickShareManager.Instance.Add(record);
 
       if (doImport)
       {
         // don't handle immediately unless enabled
         if (characterId != null && !chatType.SenderIsYou && (chatType.Channel is ChatChannels.Group or ChatChannels.Guild or
-              ChatChannels.Raid or ChatChannels.Tell) && ConfigUtil.IfSet("TriggersWatchForQuickShare") && !RecordsStore.Instance.IsQuickShareMine(fullKey))
+              ChatChannels.Raid or ChatChannels.Tell) && ConfigUtil.IfSet("TriggersWatchForQuickShare") && !QuickShareManager.Instance.IsMine(fullKey))
         {
           // ignore if we're still processing a bunch
           if (QuickShareCache.Count > 5)
@@ -770,7 +770,7 @@ namespace EQLogParser
                 Type = type
               };
 
-              RecordsStore.Instance.Add(record);
+              QuickShareManager.Instance.Add(record);
 
               Task action() => OpenQuickShareStatusAsync(shareLink);
               new MessageWindow($"Share Key: {withKey}", Resource.SHARE_MESSAGE, withKey, "View Quick Share Stats", action).ShowDialog();
@@ -800,7 +800,7 @@ namespace EQLogParser
     internal static async Task OpenQuickShareStatusAsync(string selected)
     {
       List<string> keys = [];
-      foreach (var share in RecordsStore.Instance.AllQuickShareRecords)
+      foreach (var share in QuickShareManager.Instance.Records)
       {
         if (MatchQuickShare(share.Key) is { } match)
         {

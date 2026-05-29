@@ -1,5 +1,4 @@
 using LiteDB;
-using Syncfusion.Windows.Shared;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -110,8 +109,12 @@ namespace EQLogParser
     public DateTime DateTime { get; set; }
   }
 
-  internal class ComboBoxItemDetails : NotificationObject
+  internal class ComboBoxItemDetails : INotifyPropertyChanged
   {
+    public event PropertyChangedEventHandler PropertyChanged;
+    protected void OnPropertyChanged([CallerMemberName] string name = null) =>
+      PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+
     public ComboBoxItemDetails()
     {
     }
@@ -124,7 +127,19 @@ namespace EQLogParser
 
     public string Text { get; set; }
     public string SelectedText { get; set; }
-    public bool IsChecked { get; set; }
+
+    private bool _isChecked;
+    public bool IsChecked
+    {
+      get => _isChecked;
+      set
+      {
+        if (_isChecked == value) return;
+        _isChecked = value;
+        OnPropertyChanged();
+      }
+    }
+
     public string Value { get; set; }
   }
 
@@ -147,6 +162,7 @@ namespace EQLogParser
   internal class PlayerStatsSelectionChangedEventArgs : EventArgs
   {
     public List<PlayerStats> Selected { get; } = [];
+    public List<GroupEntry> SelectedGroups { get; } = [];
     public CombinedStats CurrentStats { get; set; }
   }
 
@@ -161,6 +177,7 @@ namespace EQLogParser
     public string Action { get; set; }
     public RecordGroupCollection Iterator { get; set; }
     public List<PlayerStats> Selected { get; } = [];
+    public List<GroupEntry> SelectedGroups { get; } = [];
   }
 
   internal class GenerateStatsOptions

@@ -21,7 +21,7 @@ namespace EQLogParser
 
     public TimelineLayoutDialog()
     {
-      MainActions.SetCurrentTheme(this);
+      ThemeConfig.SetCurrentTheme(this);
       InitializeComponent();
       Owner = MainActions.GetOwner();
     }
