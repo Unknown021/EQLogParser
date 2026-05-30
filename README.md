@@ -1,3 +1,9 @@
+This is NOT the original EQLogParser - This is a version with a few extra bells and whistles, maintained separately from the original EQLogParser
+
+See the https://github.com/kauffman12/EQLogParser for the original EQLogParser
+
+------------------------
+
 # EQLogParser
 Everquest Log Parser for Live/TLP servers with basic support for P99/EMU Servers.
 
