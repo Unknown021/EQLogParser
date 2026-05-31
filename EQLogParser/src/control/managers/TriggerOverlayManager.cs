@@ -103,6 +103,28 @@ namespace EQLogParser
       });
     }
 
+    internal void ShowOverlays()
+    {
+      _ = UiUtil.InvokeAsync(async () =>
+      {
+        foreach (var kv in _textWindows)
+        {
+          if (kv.Value is OverlayWindowData windowData && windowData.TheWindow is TextOverlayWindow { } textWindow)
+          {
+            textWindow.ShowOverlay();
+          }
+        }
+
+        foreach (var kv in _timerWindows)
+        {
+          if (kv.Value is OverlayWindowData windowData && windowData.TheWindow is TimerOverlayWindow { } timerWindow)
+          {
+            await timerWindow.ShowOverlayAsync();
+          }
+        }
+      });
+    }
+
     internal void StopOverlays()
     {
       _ = UiUtil.InvokeAsync(async () =>

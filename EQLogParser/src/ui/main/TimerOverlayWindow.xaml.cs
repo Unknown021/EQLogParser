@@ -181,6 +181,26 @@ namespace EQLogParser
     }
 
     // Keep on UI thread
+    internal async Task ShowOverlayAsync()
+    {
+      await Task.Run(async () =>
+      {
+        await _renderSemaphore.WaitAsync();
+
+        try
+        {
+          _idleTimerList.Clear();
+        }
+        finally
+        {
+          _renderSemaphore.Release();
+        }
+      });
+
+      ShowContent();
+    }
+
+    // Keep on UI thread
     internal async Task StopOverlayAsync()
     {
       await Task.Run(async () =>
@@ -852,6 +872,29 @@ namespace EQLogParser
       Visibility = Visibility.Collapsed;
       contentBorder.Visibility = Visibility.Collapsed;
       mainPanel.Visibility = Visibility.Collapsed;
+    }
+
+    // Keep on UI thread
+    private void ShowContent()
+    {
+      // sometimes called from main render thread
+      if (!Dispatcher.CheckAccess())
+      {
+        Dispatcher.Invoke(ShowContent);
+        return;
+      }
+
+      foreach (var child in content.Children)
+      {
+        if (child is TimerBar { } bar && bar.Visibility != Visibility.Visible)
+        {
+          bar.Visibility = Visibility.Visible;
+        }
+      }
+
+      Visibility = Visibility.Visible;
+      contentBorder.Visibility = Visibility.Visible;
+      mainPanel.Visibility = Visibility.Visible;
     }
 
     private void WindowSizeChanged(object sender, SizeChangedEventArgs e)

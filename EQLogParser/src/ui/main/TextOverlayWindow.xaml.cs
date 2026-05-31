@@ -77,6 +77,7 @@ namespace EQLogParser
 
     // Keep on UI thread
     internal void HideOverlay() => EnsureVisible(false);
+    internal void ShowOverlay() => EnsureVisible(true);
 
     internal void AddText(string text, long now, string fontColor)
     {

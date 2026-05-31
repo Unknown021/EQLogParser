@@ -167,6 +167,12 @@ namespace EQLogParser
       e.Handled = true;
     }
 
+    private void ShowOverlaysClick(object sender, RoutedEventArgs e)
+    {
+      TriggerOverlayManager.Instance.ShowOverlays();
+      e.Handled = true;
+    }
+
     private void CollapseAllClick(object sender, RoutedEventArgs e)
     {
       if (GetTreeViewFromMenu(sender) is { } treeView)
