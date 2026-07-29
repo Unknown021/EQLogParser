@@ -1,0 +1,263 @@
+name: Sync Upstream & Release
+
+on:
+  schedule:
+    - cron: '0 13 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  SIGN_CERT_THUMBPRINT: A0FF09C0D3E05BB557764E0A0758262821C13D2B
+  INNO_SETUP_URL: https://github.com/jrsoftware/issrc/releases/download/is-7_0_2/innosetup-7.0.2-x64.exe
+  ISS_PATH: EQLogParserInstall/EQLogParserInstall.iss
+  UPDATECHECKER_PATH: EQLogParser/src/util/UpdateChecker.cs
+
+jobs:
+  sync-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        shell: bash
+        run: |
+          git remote add upstream https://github.com/kauffman12/EQLogParser.git
+          git fetch upstream --tags --force
+          git fetch upstream master
+
+      - name: Determine versions
+        id: versions
+        shell: bash
+        run: |
+          upstream_tag=$(git ls-remote --tags upstream | grep -v '\^{}' | awk -F'/' '{print $NF}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          local_tag=$(git tag -l | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          echo "Upstream latest tag: $upstream_tag"
+          echo "Local latest tag: $local_tag"
+          echo "upstream_tag=$upstream_tag" >> "$GITHUB_OUTPUT"
+          if [ "$upstream_tag" != "$local_tag" ]; then
+            echo "new_version=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "new_version=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream (auto-resolving known fork customizations)
+        id: merge
+        if: steps.versions.outputs.new_version == 'true'
+        shell: bash
+        run: |
+          set +e
+          git merge upstream/master --no-commit --no-ff
+          set -e
+
+          conflicted=$(git diff --name-only --diff-filter=U)
+
+          if [ -z "$conflicted" ]; then
+            echo "No conflicts."
+            git commit -m "Merge upstream kauffman12/EQLogParser ${{ steps.versions.outputs.upstream_tag }}"
+            echo "resolution=clean" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Only known, permanently-diverged files are safe to auto-resolve. If anything else
+          # conflicted, don't attempt anything clever - bail out to manual resolution.
+          unknown_conflicts=""
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              "$ISS_PATH"|"$UPDATECHECKER_PATH") ;;
+              *) unknown_conflicts="$unknown_conflicts$f"$'\n' ;;
+            esac
+          done <<< "$conflicted"
+
+          if [ -n "$unknown_conflicts" ]; then
+            echo "Conflicts include files outside the known auto-resolve set:"
+            echo "$unknown_conflicts"
+            git merge --abort
+            echo "resolution=manual" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "All conflicts are within the known auto-resolve set - reapplying known fork customizations on top of upstream's versions."
+          failed=""
+
+          if echo "$conflicted" | grep -qxF "$ISS_PATH"; then
+            # Start from upstream's fully-updated file (picks up any new [Files] entries etc.),
+            # then reapply the customizations that permanently diverge from upstream:
+            #   - MyAppPublisher / MyAppURL (fork identity)
+            #   - MyReleaseDir / MySrcDir / BackupUtilDir wrapped in #ifndef (so CI can override via /D)
+            #   - CreateCustomForm call signature (this fork targets a newer Inno Setup API)
+            # If you add other permanent customizations to this file later, extend the patches
+            # and validation checks below to match, or this will fall back to manual resolution.
+            git show upstream/master:"$ISS_PATH" > "$ISS_PATH"
+
+            perl -i -pe '
+              s/^#define MyAppPublisher ".*"$/#define MyAppPublisher "Unknown021"/;
+              s|^#define MyAppURL ".*"$|#define MyAppURL "https://github.com/Unknown021/EQLogParser"|;
+              s|^#define MyReleaseDir ".*"$|#ifndef MyReleaseDir\n  #define MyReleaseDir "C:\\Dev\\EQLogParser\\EQLogParser\\bin\\Release\\net8.0-windows10.0.17763.0"\n#endif|;
+              s|^;#define MyReleaseDir ".*"$||;
+              s|^#define MySrcDir ".*"$|#ifndef MySrcDir\n  #define MySrcDir "C:\\Dev\\EQLogParser\\EQLogParser"\n#endif|;
+              s|^#define BackupUtilDir ".*"$|#ifndef BackupUtilDir\n  #define BackupUtilDir "C:\\Dev\\EQLogParser\\BackupUtil\\bin\\Release\\net8.0-windows10.0.17763.0"\n#endif|;
+            ' "$ISS_PATH"
+
+            perl -0777 -i -pe 's/Form := CreateCustomForm;\r?\n\s*Form\.ClientWidth := ScaleX\(358\);\r?\n\s*Form\.ClientHeight := ScaleY\(118\);/Form := CreateCustomForm(ScaleX(358), ScaleY(118), False, False);/' "$ISS_PATH"
+
+            grep -q 'MyAppPublisher "Unknown021"' "$ISS_PATH" || failed="$failed $ISS_PATH:MyAppPublisher"
+            grep -q 'MyAppURL "https://github.com/Unknown021/EQLogParser"' "$ISS_PATH" || failed="$failed $ISS_PATH:MyAppURL"
+            grep -q '#ifndef MyReleaseDir' "$ISS_PATH" || failed="$failed $ISS_PATH:MyReleaseDir-guard"
+            grep -q '#ifndef MySrcDir' "$ISS_PATH" || failed="$failed $ISS_PATH:MySrcDir-guard"
+            grep -q '#ifndef BackupUtilDir' "$ISS_PATH" || failed="$failed $ISS_PATH:BackupUtilDir-guard"
+
+            git add "$ISS_PATH"
+          fi
+
+          if echo "$conflicted" | grep -qxF "$UPDATECHECKER_PATH"; then
+            # This file only diverges from upstream in one line: the GitHub repo it polls for
+            # the latest release. Take upstream's version, then reapply that one swap.
+            git show upstream/master:"$UPDATECHECKER_PATH" > "$UPDATECHECKER_PATH"
+
+            sed -i 's|api\.github\.com/repos/kauffman12/EQLogParser/releases/latest|api.github.com/repos/Unknown021/EQLogParser/releases/latest|' "$UPDATECHECKER_PATH"
+
+            grep -q 'api.github.com/repos/Unknown021/EQLogParser/releases/latest' "$UPDATECHECKER_PATH" || failed="$failed $UPDATECHECKER_PATH:repo-url"
+
+            git add "$UPDATECHECKER_PATH"
+          fi
+
+          if [ -n "$failed" ]; then
+            echo "Validation failed after reapplying patches:$failed - falling back to manual resolution."
+            git merge --abort
+            echo "resolution=manual" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "Merge upstream kauffman12/EQLogParser ${{ steps.versions.outputs.upstream_tag }} (auto-resolved known fork customizations)"
+            echo "resolution=auto-resolved" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open issue on unresolved conflict
+        if: steps.versions.outputs.new_version == 'true' && steps.merge.outputs.resolution == 'manual'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Manual merge needed: upstream ${{ steps.versions.outputs.upstream_tag }}" \
+            --body "Automatic sync found upstream released **${{ steps.versions.outputs.upstream_tag }}**, but merging \`upstream/master\` into \`master\` produced conflicts outside of what the workflow can safely auto-resolve (it only auto-resolves conflicts confined to \`$ISS_PATH\` and/or \`$UPDATECHECKER_PATH\`, matching their known permanent fork customizations).
+
+          Resolve locally with:
+          \`\`\`
+          git fetch upstream
+          git merge upstream/master
+          # resolve conflicts
+          git commit
+          git push
+          \`\`\`
+          Once pushed, the next scheduled run will detect the repo is already up to date with upstream ${{ steps.versions.outputs.upstream_tag }} and continue on to the next release after that automatically. Nothing else needs to be done manually here."
+          exit 1
+
+      - name: Bump installer version
+        if: steps.versions.outputs.new_version == 'true' && steps.merge.outputs.resolution != 'manual'
+        shell: bash
+        run: |
+          sed -i "s/#define MyAppVersion \"[^\"]*\"/#define MyAppVersion \"${{ steps.versions.outputs.upstream_tag }}\"/" "$ISS_PATH"
+
+      - name: Inject Syncfusion license key
+        if: steps.versions.outputs.new_version == 'true' && steps.merge.outputs.resolution != 'manual'
+        shell: pwsh
+        env:
+          SYNCFUSION_LICENSE_KEY: ${{ secrets.SYNCFUSION_LICENSE_KEY }}
+        run: |
+          $path = "EQLogParser/App.xaml.cs"
+          $needle = 'SyncfusionLicenseProvider.RegisterLicense("");'
+          $content = Get-Content -Raw $path
+          if (-not $content.Contains($needle)) {
+            throw "Could not find empty SyncfusionLicenseProvider.RegisterLicense(`"`") placeholder to patch in $path"
+          }
+          $replacement = 'SyncfusionLicenseProvider.RegisterLicense("' + $env:SYNCFUSION_LICENSE_KEY + '");'
+          $content = $content.Replace($needle, $replacement)
+          Set-Content -Path $path -Value $content -NoNewline
+          # Never commit this change - App.xaml.cs stays modified only in this ephemeral runner checkout.
+
+      - name: Setup .NET
+        if: steps.versions.outputs.new_version == 'true' && steps.merge.outputs.resolution != 'manual'
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build solution
+        if: steps.versions.outputs.new_version == 'true' && steps.merge.outputs.resolution != 'manual'
+        shell: bash
+        run: dotnet build EQLogParser.sln -c Release
+
+      - name: Run tests
+        if: steps.versions.outputs.new_version == 'true' && steps.merge.outputs.resolution != 'manual'
+        shell: bash
+        run: |
+          dotnet test EQLogParser.Test -c Release
+          dotnet test EQLogParser.Wpf.Test -c Release
+
+      - name: Install Inno Setup 7.0.2
+        if: steps.versions.outputs.new_version == 'true' && steps.merge.outputs.resolution != 'manual'
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP "innosetup-installer.exe"
+          Invoke-WebRequest -Uri $env:INNO_SETUP_URL -OutFile $out
+          Start-Process -FilePath $out -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" -Wait
+
+      - name: Import code signing certificate
+        if: steps.versions.outputs.new_version == 'true' && steps.merge.outputs.resolution != 'manual'
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.CODE_SIGNING_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.CODE_SIGNING_PFX_PASSWORD }}
+        run: |
+          $bytes = [Convert]::FromBase64String($env:PFX_BASE64)
+          $pfxPath = Join-Path $env:RUNNER_TEMP "signing.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, $bytes)
+          $securePwd = ConvertTo-SecureString -String $env:PFX_PASSWORD -AsPlainText -Force
+          Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $securePwd | Out-Null
+          Remove-Item $pfxPath -Force
+
+      - name: Compile installer
+        if: steps.versions.outputs.new_version == 'true' && steps.merge.outputs.resolution != 'manual'
+        shell: pwsh
+        run: |
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          $iscc = "C:\Program Files\Inno Setup 7\ISCC.exe"
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "EQLogParser\bin\Release\net8.0-windows10.0.17763.0"
+          $srcDir = Join-Path $env:GITHUB_WORKSPACE "EQLogParser"
+          $backupUtilDir = Join-Path $env:GITHUB_WORKSPACE "BackupUtil\bin\Release\net8.0-windows10.0.17763.0"
+          $signCmd = "`"$signtool`" sign /sha1 $env:SIGN_CERT_THUMBPRINT /fd SHA256 `$f"
+          & $iscc "/DMyReleaseDir=$releaseDir" "/DMySrcDir=$srcDir" "/DBackupUtilDir=$backupUtilDir" "/Ssigntool=$signCmd" "$env:ISS_PATH"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC compile failed with exit code $LASTEXITCODE" }
+
+      - name: Package release and publish
+        if: steps.versions.outputs.new_version == 'true' && steps.merge.outputs.resolution != 'manual'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NEW_VERSION="${{ steps.versions.outputs.upstream_tag }}"
+          find Release -iname "EQLogParser-install-*.exe" ! -name "EQLogParser-install-$NEW_VERSION.exe" -delete
+          cp "EQLogParserInstall/Output/EQLogParser-install-$NEW_VERSION.exe" "Release/EQLogParser-install-$NEW_VERSION.exe"
+          git add Release "$ISS_PATH"
+          git commit -m "$NEW_VERSION"
+          git tag "$NEW_VERSION"
+          git push origin master --follow-tags
+          gh release create "$NEW_VERSION" "Release/EQLogParser-install-$NEW_VERSION.exe" \
+            --title "$NEW_VERSION" \
+            --notes "Automated sync of upstream kauffman12/EQLogParser release $NEW_VERSION."

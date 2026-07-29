@@ -10,10 +10,15 @@
 #define MyAppPublisher "Unknown021"
 #define MyAppURL "https://github.com/Unknown021/EQLogParser"
 #define MyAppExeName "EQLogParser.exe"
-#define MyReleaseDir "C:\Dev\EQLogParser\EQLogParser\bin\Release\net8.0-windows10.0.17763.0"
-;#define MyReleaseDir "C:\Dev\EQLogParser\EQLogParser\bin\Debug\net8.0-windows10.0.17763.0"
-#define MySrcDir "C:\Dev\EQLogParser\EQLogParser"
-#define BackupUtilDir "C:\Dev\EQLogParser\BackupUtil\bin\Release\net8.0-windows10.0.17763.0"
+#ifndef MyReleaseDir
+  #define MyReleaseDir "C:\Dev\EQLogParser\EQLogParser\bin\Release\net8.0-windows10.0.17763.0"
+#endif
+#ifndef MySrcDir
+  #define MySrcDir "C:\Dev\EQLogParser\EQLogParser"
+#endif
+#ifndef BackupUtilDir
+  #define BackupUtilDir "C:\Dev\EQLogParser\BackupUtil\bin\Release\net8.0-windows10.0.17763.0"
+#endif
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
