@@ -1,12 +1,11 @@
-using EQLogParser;
 using Moq;
 
-namespace EQLogParserTest
+namespace EQLogParser.Wpf.Test
 {
   [TestClass]
   public class DamageLineParserTest
   {
-    private Mock<IEQDataStore>? _mockDataManager;
+    private EQDataStore? _dataStore;
     private Mock<IFightManager>? _mockFightManager;
 
     [TestInitialize]
@@ -14,21 +13,19 @@ namespace EQLogParserTest
     {
       ConfigUtil.PlayerName = "TestPlayer";
       AdpsTracker.Instance.Clear();
-      _mockDataManager = new Mock<IEQDataStore>();
-#pragma warning disable CS8603 // Possible null reference return.
-      _mockDataManager.Setup(m => m.GetDamagingSpellByName(It.IsAny<string>())).Returns((string name) => null);
-#pragma warning restore CS8603 // Possible null reference return.
-      _mockDataManager.Setup(m => m.IsOldSpell(It.IsAny<string>())).Returns(false);
-      _mockDataManager.Setup(m => m.AbbreviateSpellName(It.IsAny<string>())).Returns((string name) => name);
-#pragma warning disable CS8603 // Possible null reference return.
-      _mockDataManager.Setup(m => m.GetSpellByAbbrv(It.IsAny<string>())).Returns((string name) => null);
-#pragma warning restore CS8603 // Possible null reference return.
+
+      // Set current directory so EQDataStore can find data files (data/spells.txt, etc.)
+      Environment.CurrentDirectory = AppDomain.CurrentDomain.BaseDirectory;
+
+      // Create a fresh data store which loads from data files
+      _dataStore = new EQDataStore();
+      EQDataStore.Instance = _dataStore;
+
       _mockFightManager = new Mock<IFightManager>();
       _mockFightManager.Setup(m => m.RemoveActiveFight(It.IsAny<string>()));
 #pragma warning disable CS8603 // Possible null reference return.
       _mockFightManager.Setup(m => m.GetFight(It.IsAny<string>())).Returns((string name) => null);
 #pragma warning restore CS8603 // Possible null reference return.
-      DamageLineParser.DataManager = _mockDataManager.Object;
       DamageLineParser.FightManager = _mockFightManager.Object;
     }
 
@@ -36,6 +33,7 @@ namespace EQLogParserTest
     public void Cleanup()
     {
       AdpsTracker.Instance.Clear();
+      _dataStore = null;
     }
 
     private static DamageRecord ParseAction(string action)
@@ -109,6 +107,100 @@ namespace EQLogParserTest
       Assert.IsFalse(record.AttackerIsSpell);
       Assert.IsTrue(LineModifiersParser.IsCrit(record.ModifiersMask));
       Assert.IsTrue(LineModifiersParser.IsLucky(record.ModifiersMask));
+    }
+
+    [TestMethod]
+    public void TestMelee_Cleaves()
+    {
+      var record = ParseAction("Astralx cleaves Sontalak for 126225 points of damage. (Critical)");
+      Assert.IsNotNull(record);
+      Assert.AreEqual("Astralx", record.Attacker);
+      Assert.AreEqual("Sontalak", record.Defender);
+      Assert.AreEqual((uint)126225, record.Total);
+      Assert.AreEqual(Labels.Melee, record.Type);
+      Assert.AreEqual("Cleaves", record.SubType);
+      Assert.IsFalse(record.AttackerIsSpell);
+      Assert.IsTrue(LineModifiersParser.IsCrit(record.ModifiersMask));
+    }
+
+    [TestMethod]
+    public void TestMelee_Cleaves_NoModifiers()
+    {
+      var record = ParseAction("Useless cleaves an abyssal terror for 9022 points of damage.");
+      Assert.IsNotNull(record);
+      Assert.AreEqual("Useless", record.Attacker);
+      Assert.AreEqual("An abyssal terror", record.Defender);
+      Assert.AreEqual((uint)9022, record.Total);
+      Assert.AreEqual(Labels.Melee, record.Type);
+      Assert.AreEqual("Cleaves", record.SubType);
+      Assert.IsFalse(record.AttackerIsSpell);
+    }
+
+    [TestMethod]
+    public void TestMelee_Cleaves_LuckyCritical()
+    {
+      var record = ParseAction("You cleave Ogna, Artisan of War for 20581 points of damage. (Lucky Critical)");
+      Assert.IsNotNull(record);
+      Assert.AreEqual(ConfigUtil.PlayerName, record.Attacker);
+      Assert.AreEqual("Ogna, Artisan of War", record.Defender);
+      Assert.AreEqual((uint)20581, record.Total);
+      Assert.AreEqual(Labels.Melee, record.Type);
+      Assert.AreEqual("Cleaves", record.SubType);
+      Assert.IsFalse(record.AttackerIsSpell);
+      Assert.IsTrue(LineModifiersParser.IsCrit(record.ModifiersMask));
+      Assert.IsTrue(LineModifiersParser.IsLucky(record.ModifiersMask));
+    }
+
+    [TestMethod]
+    public void TestMelee_YouSmite_NoModifiers()
+    {
+      var record = ParseAction("You smite an abyssal terror for 9022 points of damage.");
+      Assert.IsNotNull(record);
+      Assert.AreEqual(ConfigUtil.PlayerName, record.Attacker);
+      Assert.AreEqual("An abyssal terror", record.Defender);
+      Assert.AreEqual((uint)9022, record.Total);
+      Assert.AreEqual(Labels.Melee, record.Type);
+      Assert.AreEqual("Smites", record.SubType);
+      Assert.IsFalse(record.AttackerIsSpell);
+    }
+
+    [TestMethod]
+    public void TestMelee_Smites_NoModifiers()
+    {
+      var record = ParseAction("Useless smites an abyssal terror for 9022 points of damage.");
+      Assert.IsNotNull(record);
+      Assert.AreEqual("Useless", record.Attacker);
+      Assert.AreEqual("An abyssal terror", record.Defender);
+      Assert.AreEqual((uint)9022, record.Total);
+      Assert.AreEqual(Labels.Melee, record.Type);
+      Assert.AreEqual("Smites", record.SubType);
+      Assert.IsFalse(record.AttackerIsSpell);
+    }
+
+    [TestMethod]
+    public void TestMelee_YouReave_NoModifiers()
+    {
+      var record = ParseAction("You reave an abyssal terror for 9022 points of damage.");
+      Assert.IsNotNull(record);
+      Assert.AreEqual(ConfigUtil.PlayerName, record.Attacker);
+      Assert.AreEqual("An abyssal terror", record.Defender);
+      Assert.AreEqual((uint)9022, record.Total);
+      Assert.AreEqual(Labels.Melee, record.Type);
+      Assert.AreEqual("Reaves", record.SubType);
+      Assert.IsFalse(record.AttackerIsSpell);
+    }
+
+    [TestMethod]
+    public void TestMelee_Reaves_NoModifiers()
+    {
+      var record = ParseAction("Useless reaves an abyssal terror for 9022 points of damage.");
+      Assert.IsNotNull(record);
+      Assert.AreEqual("Useless", record.Attacker);
+      Assert.AreEqual("An abyssal terror", record.Defender);
+      Assert.AreEqual((uint)9022, record.Total);
+      Assert.AreEqual(Labels.Melee, record.Type);
+      Assert.AreEqual("Reaves", record.SubType);
+      Assert.IsFalse(record.AttackerIsSpell);
     }
 
     [TestMethod]

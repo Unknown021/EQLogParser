@@ -104,7 +104,7 @@ namespace EQLogParser
 
     private void TheTextChanged(object sender, TextChangedEventArgs e)
     {
-      if (!_userTurnedOff && TriggerUtil.IsProbRegex(_theTextBox?.Text) && _theCheckBox.IsChecked == false)
+      if (!_userTurnedOff && TriggerUtil.IsProbRegex(_theTextBox?.Text) && _theCheckBox.IsChecked is false)
       {
         _theCheckBox.IsChecked = true;
       }
@@ -141,7 +141,7 @@ namespace EQLogParser
           _theTextBox.TextChanged += TheTextChanged;
 
           // if the toggle is changed to false it must have been a user decision
-          if (_theCheckBox.IsChecked == false)
+          if (_theCheckBox.IsChecked is false)
           {
             _userTurnedOff = true;
           }

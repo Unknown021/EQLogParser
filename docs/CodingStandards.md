@@ -56,7 +56,8 @@
 
 ## Code Organization
 
-- XML documentation comments are used for public members
+- Use `/* ... */` comment blocks for method, class, enum, and field documentation
+- XML documentation comments (`/// <summary>`) are **only** for WPF component class headers (e.g., `TriggersView`, `ConditionEditor`) where tooling or designers may consume them
 - **Remove unused `using` statements** — run `dotnet format` or your IDE's cleanup to auto-remove them before committing
 - Methods are ordered by visibility (public first, then internal, then private)
 - Related methods are grouped together
@@ -166,6 +167,28 @@ To maintain a consistent tone and professional feel, all messages in `MessageWin
 - Extract variable once in pattern match, then reuse — avoid redundant `as` casts after the match
 - Prefer `switch` expressions over `switch` statements
 - Use `OfType<T>()` for filtering collections instead of `ForEach(x as Type)`
+
+### Nullable Reference Types
+- **Never use `null!` (null-forgiving operator)** — it suppresses compiler null-safety checks and hides potential bugs
+- Make properties/fields `string?` when they can legitimately be null rather than using `null!` to silence warnings
+- Use `?? defaultValue` or null-conditional operators (`?.`, `?[`) instead of `!`
+- If a value is guaranteed non-null by program logic, use a local variable assignment with pattern matching: `if (value is not null) { var safe = value; ... }`
+
+**Anti-patterns to avoid:**
+
+```csharp
+// Bad: null-forgiving operator hides the fact that this can be null
+public string Name { get; } = null!;
+
+// Good: make it nullable and handle null at the call site
+public string? Name { get; }
+
+// Bad: suppressing null with !
+return token.VariableName!;
+
+// Good: use null-coalescing or pattern matching
+return token.VariableName ?? "";
+```
 
 **Anti-patterns to avoid:**
 

@@ -24,8 +24,58 @@ namespace EQLogParser
   {
     public const string ShareOverlay = "EQLPO";
     public const string ShareTrigger = "EQLPT";
+
+    // Legacy: shows file dialog and processes in one call
     internal static async Task ImportTriggers(TriggerNode parent) => await Import(parent);
     internal static async Task ImportOverlays(TriggerNode triggerNode) => await Import(triggerNode, false);
+
+    // Pick a file via OpenFileDialog; returns the path or null if cancelled
+    internal static string SelectImportFile(TriggerNode parent, bool triggers = true)
+    {
+      var defExt = triggers ? $".{ExtTrigger}.gz" : $".{ExtOverlay}.gz";
+      var filter = triggers ? $"All Supported Files|*.{ExtTrigger}.gz;*.gtp" : $"All Supported Files|*.{ExtOverlay}.gz";
+
+      var dialog = new OpenFileDialog
+      {
+        DefaultExt = defExt,
+        Filter = filter
+      };
+
+      return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
+
+    // Process a previously-selected import file (caller shows progress UI around this)
+    internal static async Task ProcessImportFile(string filePath, TriggerNode parent, bool triggers = true)
+    {
+      var fileInfo = new FileInfo(filePath);
+      if (!fileInfo.Exists || fileInfo.Length >= 100000000) return;
+
+      if (filePath.EndsWith($"{ExtTrigger}.gz", StringComparison.OrdinalIgnoreCase) ||
+        filePath.EndsWith($"{ExtOverlay}.gz", StringComparison.OrdinalIgnoreCase))
+      {
+        await using var fs = fileInfo.OpenRead();
+        using var decompressionStream = new GZipStream(fs, CompressionMode.Decompress);
+        using var reader = new StreamReader(decompressionStream);
+        var json = await reader.ReadToEndAsync();
+        var data = JsonSerializer.Deserialize<List<ExportTriggerNode>>(json, SerializationOptions);
+        if (triggers)
+          await TriggerStateDB.Instance.ImportTriggers(parent, data);
+        else
+          await TriggerStateDB.Instance.ImportOverlays(data);
+      }
+      else if (filePath.EndsWith(".gtp", StringComparison.OrdinalIgnoreCase))
+      {
+        await using var fs = fileInfo.OpenRead();
+        using var ms = new MemoryStream();
+        await fs.CopyToAsync(ms);
+        var data = ms.ToArray();
+        if (data.Length > 0)
+        {
+          var imported = GinaUtil.CovertToTriggerNodes(data);
+          await TriggerStateDB.Instance.ImportTriggers(parent, imported);
+        }
+      }
+    }
 
     private const string ExtTrigger = "tgf";
     private const string ExtOverlay = "ogf";
@@ -67,6 +117,13 @@ namespace EQLogParser
       return isValid;
     }
 
+    internal static bool TestConditionProperty(string condition, ConditionEditor editor)
+    {
+      var isValid = string.IsNullOrWhiteSpace(condition) || ConditionParser.Parse(condition) != null;
+      editor.SetForeground(isValid ? "ContentForeground" : "EQStopForegroundBrush");
+      return isValid;
+    }
+
     internal static async Task Copy(object to, object from)
     {
       if (to is Trigger toTrigger && from is Trigger fromTrigger)
@@ -77,6 +134,7 @@ namespace EQLogParser
         toTrigger.DurationSeconds = fromTrigger.DurationSeconds;
         toTrigger.Pattern = TextUtils.Trim(fromTrigger.Pattern);
         toTrigger.PreviousPattern = TextUtils.Trim(fromTrigger.PreviousPattern);
+        toTrigger.MatchVariableCondition = TextUtils.Trim(fromTrigger.MatchVariableCondition);
         toTrigger.WindowPattern = TextUtils.Trim(fromTrigger.WindowPattern);
         toTrigger.EndEarlyPattern = TextUtils.Trim(fromTrigger.EndEarlyPattern);
         toTrigger.EndEarlyPattern2 = TextUtils.Trim(fromTrigger.EndEarlyPattern2);
@@ -90,7 +148,14 @@ namespace EQLogParser
         toTrigger.Priority = fromTrigger.Priority;
         toTrigger.RepeatedResetTime = fromTrigger.RepeatedResetTime;
         toTrigger.LockoutTime = fromTrigger.LockoutTime;
-        toTrigger.SelectedOverlays = fromTrigger.SelectedOverlays;
+        toTrigger.EnableTimer = fromTrigger.EnableTimer;
+        toTrigger.SelectedOverlays = fromTrigger.SelectedOverlays is { Count: > 0 } srcOverlays
+          ? [.. srcOverlays]
+          : [];
+        toTrigger.ActiveColor = fromTrigger.ActiveColor;
+        toTrigger.IdleColor = fromTrigger.IdleColor;
+        toTrigger.ResetColor = fromTrigger.ResetColor;
+        toTrigger.FontColor = fromTrigger.FontColor;
         toTrigger.TriggerAgainOption = fromTrigger.TriggerAgainOption;
         toTrigger.TimerType = fromTrigger.TimerType;
         toTrigger.UseRegex = fromTrigger.UseRegex;
@@ -114,9 +179,22 @@ namespace EQLogParser
         toTrigger.EndEarlySoundToPlay = TextUtils.Trim(fromTrigger.EndEarlySoundToPlay);
         toTrigger.EndSoundToPlay = TextUtils.Trim(fromTrigger.EndSoundToPlay);
         toTrigger.WarningSoundToPlay = TextUtils.Trim(fromTrigger.WarningSoundToPlay);
+        toTrigger.EndTimerClearVariables = TextUtils.Trim(fromTrigger.EndTimerClearVariables);
         toTrigger.IconSource = fromTrigger.IconSource;
         toTrigger.VoiceRate = fromTrigger.VoiceRate;
         toTrigger.Volume = fromTrigger.Volume;
+        toTrigger.VariableActions = fromTrigger.VariableActions is { Count: > 0 } srcActions
+          ? srcActions.Select(va => new VariableAction
+          {
+            ActionType = va.ActionType,
+            DataType = va.DataType,
+            VariableName = va.VariableName,
+            Value = va.Value,
+            Step = va.Step,
+            InitialValue = va.InitialValue,
+            TimeToLiveSeconds = va.TimeToLiveSeconds
+          }).ToList()
+          : [];
 
         if (toTrigger is TriggerPropertyModel toModel)
         {
@@ -148,10 +226,12 @@ namespace EQLogParser
         }
         else if (fromTrigger is TriggerPropertyModel fromModel)
         {
-          toTrigger.ActiveColor = fromModel.TriggerActiveBrush?.Color.ToHexString();
-          toTrigger.IdleColor = fromModel.TriggerIdleBrush?.Color.ToHexString();
-          toTrigger.ResetColor = fromModel.TriggerResetBrush?.Color.ToHexString();
-          toTrigger.FontColor = fromModel.TriggerFontBrush?.Color.ToHexString();
+          // Colors already copied above from base Trigger properties;
+          // override with brush-derived values only if source is a TriggerPropertyModel.
+          toTrigger.ActiveColor = fromModel.TriggerActiveBrush?.Color.ToHexString() ?? toTrigger.ActiveColor;
+          toTrigger.IdleColor = fromModel.TriggerIdleBrush?.Color.ToHexString() ?? toTrigger.IdleColor;
+          toTrigger.ResetColor = fromModel.TriggerResetBrush?.Color.ToHexString() ?? toTrigger.ResetColor;
+          toTrigger.FontColor = fromModel.TriggerFontBrush?.Color.ToHexString() ?? toTrigger.FontColor;
 
           var selectedOverlays = fromModel.SelectedTextOverlays.Where(item => item.IsChecked).Select(item => item.Value).ToList();
           selectedOverlays.AddRange(fromModel.SelectedTimerOverlays.Where(item => item.IsChecked).Select(item => item.Value));
@@ -304,12 +384,12 @@ namespace EQLogParser
     internal static async Task LoadOverlayStyle(TriggerNode node, Overlay overlay)
     {
       Application.Current.Resources["OverlayText-" + node.Id] = node.Name;
-      if (overlay?.IsTextOverlay == true)
+      if (overlay?.IsTextOverlay is true)
       {
         // workaround to load styles
         await Copy(new TextOverlayPropertyModel { Node = node }, overlay);
       }
-      else if (overlay?.IsTextOverlay == false)
+      else if (overlay?.IsTextOverlay is false)
       {
         // workaround to load styles
         await Copy(new TimerOverlayPropertyModel { Node = node }, overlay);
@@ -621,18 +701,27 @@ namespace EQLogParser
       }
     }
 
-    internal static async void CheckForStop(ChatType chatType, string action)
+    /// <summary>Check for embedded EQLP commands ({EQLP:STOP}, {EQLP:CLEAR}) and execute them.</summary>
+    /// <remarks>Called fire-and-forget from the chat processing loop (Task.Run context). Uses async void intentionally.</remarks>
+    internal static async void CheckCommands(ChatType chatType, string action)
     {
-      if (chatType.Sender == null || action == null)
-      {
+      if (chatType?.Sender == null || action == null || !chatType.SenderIsYou)
         return;
-      }
 
-      // handle stop command
-      if (chatType.SenderIsYou && (chatType.TextStart - 27) is var s and > 0 && action.Length > s
-          && action.AsSpan()[s..].StartsWith("{EQLP:STOP}", StringComparison.OrdinalIgnoreCase))
+      // TextStart is an absolute position in the full log line (includes 27-char timestamp prefix).
+      // Since 'action' has the timestamp stripped, subtract 27 to get the correct offset.
+      var offset = chatType.TextStart - 27;
+      if (offset > 0 && action.Length > offset)
       {
-        await TriggerManager.Instance.StopTriggersAsync();
+        var tail = action[offset..];
+        if (tail.StartsWith("{EQLP:STOP}", StringComparison.OrdinalIgnoreCase))
+        {
+          await TriggerManager.Instance.StopTriggersAsync();
+        }
+        else if (tail.StartsWith("{EQLP:CLEAR}", StringComparison.OrdinalIgnoreCase))
+        {
+          await TriggerManager.Instance.ClearVariablesAsync();
+        }
       }
     }
 
@@ -682,7 +771,7 @@ namespace EQLogParser
           {
             if (!QuickShareCache.TryGetValue(quickShareKey, out var value))
             {
-              var autoMerge = chatType.Channel != ChatChannels.Tell && trust?.Any(tp => tp.Name.Equals(chatType.Sender, StringComparison.OrdinalIgnoreCase)) == true;
+              var autoMerge = chatType.Channel != ChatChannels.Tell && trust?.Any(tp => tp.Name.Equals(chatType.Sender, StringComparison.OrdinalIgnoreCase)) is true;
               QuickShareCache[quickShareKey] = new CharacterData { Sender = chatType.Sender, AutoMerge = autoMerge, IsTrigger = type == ShareTrigger };
               QuickShareCache[quickShareKey].CharacterIds.Add(characterId);
               _ = RunQuickShareTaskAsync(quickShareKey, autoMerge);
@@ -863,7 +952,7 @@ namespace EQLogParser
       try
       {
         var url = $"http://share.kizant.net:8080/download/{quickShareKey}";
-        var response = MainActions.TheHttpClient.GetAsync(url).Result;
+        var response = await MainActions.TheHttpClient.GetAsync(url);
         if (response.IsSuccessStatusCode)
         {
           await using var decompressionStream = new GZipStream(await response.Content.ReadAsStreamAsync(), CompressionMode.Decompress);
@@ -1010,7 +1099,7 @@ namespace EQLogParser
       {
         foreach (var viewNode in viewNodes)
         {
-          if (hidePrivateTriggers && viewNode?.SerializedData?.TriggerData?.Private == true)
+          if (hidePrivateTriggers && viewNode?.SerializedData?.TriggerData?.Private is true)
           {
             continue;
           }
@@ -1028,52 +1117,9 @@ namespace EQLogParser
     {
       try
       {
-        var defExt = triggers ? $".{ExtTrigger}.gz" : $".{ExtOverlay}.gz";
-        var filter = triggers ? $"All Supported Files|*.{ExtTrigger}.gz;*.gtp" : $"All Supported Files|*.{ExtOverlay}.gz";
-
-        // WPF doesn't have its own file chooser so use Win32 Version
-        var dialog = new OpenFileDialog
-        {
-          // filter to txt files
-          DefaultExt = defExt,
-          Filter = filter
-        };
-
-        if (dialog.ShowDialog() == true)
-        {
-          // limit to 100 megs just in case
-          var fileInfo = new FileInfo(dialog.FileName);
-          if (fileInfo.Exists && fileInfo.Length < 100000000)
-          {
-            if (dialog.FileName.EndsWith($"{ExtTrigger}.gz", StringComparison.OrdinalIgnoreCase) ||
-              dialog.FileName.EndsWith($"{ExtOverlay}.gz", StringComparison.OrdinalIgnoreCase))
-            {
-              var decompressionStream = new GZipStream(fileInfo.OpenRead(), CompressionMode.Decompress);
-              var reader = new StreamReader(decompressionStream);
-              var json = await reader.ReadToEndAsync();
-              reader.Close();
-              var data = JsonSerializer.Deserialize<List<ExportTriggerNode>>(json, SerializationOptions);
-              if (triggers)
-              {
-                await TriggerStateDB.Instance.ImportTriggers(parent, data);
-              }
-              else
-              {
-                await TriggerStateDB.Instance.ImportOverlays(data);
-              }
-            }
-            else if (dialog.FileName.EndsWith(".gtp", StringComparison.InvariantCulture))
-            {
-              var data = new byte[fileInfo.Length];
-              var read = fileInfo.OpenRead().Read(data);
-              if (read > 0)
-              {
-                var imported = GinaUtil.CovertToTriggerNodes(data);
-                await TriggerStateDB.Instance.ImportTriggers(parent, imported);
-              }
-            }
-          }
-        }
+        var filePath = SelectImportFile(parent, triggers);
+        if (filePath is not null)
+          await ProcessImportFile(filePath, parent, triggers);
       }
       catch (Exception ex)
       {
@@ -1120,7 +1166,7 @@ namespace EQLogParser
       {
         foreach (var childView in viewNode.ChildNodes.Cast<TriggerTreeViewNode>())
         {
-          if (hidePrivateTriggers && childView?.SerializedData?.TriggerData?.Private == true)
+          if (hidePrivateTriggers && childView?.SerializedData?.TriggerData?.Private is true)
           {
             continue;
           }

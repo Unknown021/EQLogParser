@@ -22,11 +22,6 @@ namespace EQLogParser
     Casterpbplayers = 36, Pet2 = 38, Nearbyplayersae = 40, Targetgroup = 41, Directionae = 42, Targetringae = 45
   }
 
-  internal enum SpellResist
-  {
-    Undefined = -2, Reflected = -1, Unresistable = 0, Magic, Fire, Cold, Poison, Disease, Lowest, Average, Physical, Corruption
-  }
-
   internal static class Labels
   {
     public const string Absorb = "Absorb";
@@ -66,21 +61,13 @@ namespace EQLogParser
     public const string Invulnerable = "Invulnerable";
   }
 
-  internal interface IEQDataStore
-  {
-    SpellData GetDamagingSpellByName(string name);
-    bool IsOldSpell(string name);
-    string AbbreviateSpellName(string spell);
-    SpellData GetSpellByAbbrv(string abbrv);
-  }
-
   internal class SpellAbbrvComparer : IEqualityComparer<SpellData>
   {
     public bool Equals(SpellData x, SpellData y) => x?.NameAbbrv == y?.NameAbbrv;
     public int GetHashCode(SpellData obj) => obj.NameAbbrv.GetHashCode();
   }
 
-  internal class EQDataStore : IEQDataStore, ILifecycle
+  internal class EQDataStore : ILifecycle
   {
     private static readonly ILog Log = LogManager.GetLogger(MethodBase.GetCurrentMethod()?.DeclaringType);
 

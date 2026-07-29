@@ -3,6 +3,7 @@ using Syncfusion.Windows.PropertyGrid;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -17,6 +18,7 @@ namespace EQLogParser
 {
   public partial class TriggersView : IDocumentContent
   {
+
     private readonly Dictionary<string, Window> _previewWindows = [];
     private TriggerConfig _theConfig;
     private readonly PatternEditor _closePatternEditor;
@@ -26,6 +28,7 @@ namespace EQLogParser
     private readonly PatternEditor _endEarlyPatternEditor;
     private readonly PatternEditor _endEarlyPattern2Editor;
     private readonly PatternEditor _endEarlyPattern3Editor;
+    private readonly ConditionEditor _conditionEditor;
     private readonly RangeEditor _topEditor;
     private readonly RangeEditor _leftEditor;
     private readonly RangeEditor _heightEditor;
@@ -36,10 +39,30 @@ namespace EQLogParser
     private List<string> _deviceNameList;
     private string _currentCharacterId;
     private bool _ready;
+    private readonly ObservableCollection<VariableActionViewModel> _variableActionViewModels = [];
 
     public TriggersView()
     {
       InitializeComponent();
+
+      // Wire up PropertyChanged on existing ViewModels and listen for collection changes
+      _variableActionViewModels.CollectionChanged += (_, e) =>
+      {
+        if (e.OldItems is not null)
+        {
+          foreach (VariableActionViewModel vm in e.OldItems)
+          {
+            vm.PropertyChanged -= OnVariableActionPropertyChanged;
+          }
+        }
+        if (e.NewItems is not null)
+        {
+          foreach (VariableActionViewModel vm in e.NewItems)
+          {
+            vm.PropertyChanged += OnVariableActionPropertyChanged;
+          }
+        }
+      };
 
       _characterViewWidth = mainGrid.ColumnDefinitions[0].Width;
       voices.ItemsSource = AudioManager.Instance.GetVoiceList();
@@ -87,6 +110,7 @@ namespace EQLogParser
       _endEarlyPatternEditor = (PatternEditor)AddEditorInstance(new PatternEditor(), "EndEarlyPattern");
       _endEarlyPattern2Editor = (PatternEditor)AddEditorInstance(new PatternEditor(), "EndEarlyPattern2");
       _endEarlyPattern3Editor = (PatternEditor)AddEditorInstance(new PatternEditor(), "EndEarlyPattern3");
+      _conditionEditor = (ConditionEditor)AddEditorInstance(new ConditionEditor(), "MatchVariableCondition");
       AddEditor<CheckComboBoxEditor>("SelectedTextOverlays", "SelectedTimerOverlays");
       AddEditor<ColorEditor>("OverlayBrush", "FontBrush", "ActiveBrush", "IdleBrush", "ResetBrush", "BackgroundBrush");
       AddEditor<DurationEditor>("ResetDurationTimeSpan", "IdleTimeoutTimeSpan");
@@ -541,11 +565,11 @@ namespace EQLogParser
       // Tab 2 header
       if (trigger)
       {
-        secondaryPropertyGridTab.Header = $"{TriggerListOptionLabels.TimerTypes[timerType]} Timer";
+        secondaryPropertyGridTab.Header = $"Timer ({TriggerListOptionLabels.TimerTypes[timerType]})";
       }
       else
       {
-        secondaryPropertyGridTab.Header = "Cooldown Mode";
+        secondaryPropertyGridTab.Header = "Timer (Cooldown)";
       }
 
       PropertyGridUtil.EnableCategories(generalPropertyGrid,
@@ -586,6 +610,7 @@ namespace EQLogParser
         isValid = isValid && TriggerUtil.TestRegexProperty(trigger.EndUseRegex, trigger.EndEarlyPattern, _endEarlyPatternEditor);
         isValid = isValid && TriggerUtil.TestRegexProperty(trigger.EndUseRegex2, trigger.EndEarlyPattern2, _endEarlyPattern2Editor);
         isValid = isValid && TriggerUtil.TestRegexProperty(trigger.EndUseRegex3, trigger.EndEarlyPattern3, _endEarlyPattern3Editor);
+        isValid = isValid && TriggerUtil.TestConditionProperty(trigger.MatchVariableCondition, _conditionEditor);
 
         if (args.Property.Name == patternItem.PropertyName || args.Property.Name == previousPatternItem.PropertyName)
         {
@@ -850,6 +875,17 @@ namespace EQLogParser
       var model = generalPropertyGrid?.SelectedObject ?? secondaryPropertyGrid?.SelectedObject;
       if (model is TriggerPropertyModel triggerModel)
       {
+        // Sync variable actions from ViewModel UI to model before saving (filter out entries with no name)
+        triggerModel.VariableActions = _variableActionViewModels
+          .Select(vm =>
+          {
+            var va = new VariableAction();
+            vm.SyncToModel(va);
+            return va;
+          })
+          .Where(va => !string.IsNullOrWhiteSpace(va.VariableName))
+          .ToList();
+
         await TriggerUtil.Copy(triggerModel.Node.TriggerData, model);
         await TriggerStateDB.Instance.Update(triggerModel.Node);
       }
@@ -900,6 +936,21 @@ namespace EQLogParser
         await TriggerUtil.Copy(model, triggerModel.Node.TriggerData);
         var timerType = triggerModel.Node.TriggerData.TimerType;
         EnableCategories(true, timerType, false, false);
+
+        // Restore variable actions from original data
+        _variableActionViewModels.Clear();
+        if (triggerModel.Node.TriggerData?.VariableActions is { Count: > 0 } originalActions)
+        {
+          foreach (var action in originalActions)
+          {
+            _variableActionViewModels.Add(VariableActionViewModel.FromModelSilent(action));
+          }
+        }
+        else
+        {
+          // Add a starter variable card so the UI isn't empty
+          _variableActionViewModels.Add(VariableActionViewModel.CreateSilent(GenerateVariableName()));
+        }
       }
       else if (model is TimerOverlayPropertyModel timerModel)
       {
@@ -957,13 +1008,38 @@ namespace EQLogParser
       secondaryPropertyGrid.IsEnabled = secondaryPropertyGrid.SelectedObject != null;
       secondaryPropertyGrid.DescriptionPanelVisibility = (data.Item1?.IsTrigger() == true || data.Item1?.IsOverlay() == true) ? Visibility.Visible : Visibility.Collapsed;
 
+      // Reset to first tab on trigger selection change
+      propertyTabControl.SelectedItem = generalPropertyGridTab;
+
       if (data.Item1?.IsTrigger() == true)
       {
         var timerType = data.Item1.SerializedData?.TriggerData.TimerType ?? 0;
         EnableCategories(true, timerType, false, false);
+
+        // Initialize variable actions for this trigger
+        var trigger = data.Item1.SerializedData?.TriggerData;
+        _variableActionViewModels.Clear();
+        if (trigger?.VariableActions is { Count: > 0 } actions)
+        {
+          foreach (var action in actions)
+          {
+            _variableActionViewModels.Add(VariableActionViewModel.FromModelSilent(action));
+          }
+        }
+        else
+        {
+          // Add a starter variable card so the UI isn't empty
+          _variableActionViewModels.Add(VariableActionViewModel.CreateSilent(GenerateVariableName()));
+        }
+
+        variableActionsList.ItemsSource = _variableActionViewModels;
+        variableActionsTab.Visibility = Visibility.Visible;
+        UpdateVariableActionsEmptyState();
       }
       else if (data.Item1?.IsOverlay() == true)
       {
+        variableActionsTab.Visibility = Visibility.Collapsed;
+
         if (isTimerOverlay)
         {
           EnableCategories(false, 0, true, isCooldownOverlay);
@@ -1017,5 +1093,114 @@ namespace EQLogParser
       theTreeView.ClosePreviewOverlaysEvent -= ClosePreviewOverlaysEvent;
       _ready = false;
     }
+
+    /* Generates a unique variable name by scanning existing names for the highest index. */
+    private string GenerateVariableName()
+    {
+      var maxIndex = -1;
+      foreach (var vm in _variableActionViewModels)
+      {
+        if (vm.VariableName is { Length: > 9 } name && name.StartsWith("gVariable", StringComparison.Ordinal))
+        {
+          if (int.TryParse(name[9..], out var idx) && idx > maxIndex)
+            maxIndex = idx;
+        }
+      }
+
+      return $"gVariable{maxIndex + 1}";
+    }
+
+    private void UpdateVariableActionsEmptyState()
+    {
+      var isEmpty = _variableActionViewModels.Count == 0;
+      variableActionsEmptyState.Visibility = isEmpty ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void VariableActionRowLoaded(object sender, RoutedEventArgs e)
+    {
+      // Placeholder is handled by XAML overlay TextBlock.
+      // Binding handles all value sync and IsDirty tracking automatically.
+      if (sender is Border border && border.Child is StackPanel panel && border.DataContext is VariableActionViewModel vm)
+      {
+        var valueTextBox = UiElementUtil.FindChild<TextBox>(panel, "valueTextBox");
+        if (valueTextBox is not null)
+        {
+          // Use Tag to track if handler was already attached, preventing stacking on container reuse
+          if (valueTextBox.Tag is not ValueEscapeHandler handler)
+          {
+            handler = new ValueEscapeHandler(vm, valueTextBox);
+            valueTextBox.Tag = handler;
+            valueTextBox.PreviewKeyDown += handler.OnPreviewKeyDown;
+          }
+        }
+      }
+    }
+
+    /* Holds a stable delegate reference for the Escape-key handler on variable value TextBoxes. */
+    private sealed class ValueEscapeHandler
+    {
+      private readonly WeakReference<VariableActionViewModel> _vmRef;
+      private readonly WeakReference<TextBox> _textBoxRef;
+
+      public ValueEscapeHandler(VariableActionViewModel vm, TextBox textBox)
+      {
+        _vmRef = new WeakReference<VariableActionViewModel>(vm);
+        _textBoxRef = new WeakReference<TextBox>(textBox);
+      }
+
+      public void OnPreviewKeyDown(object sender, KeyEventArgs e)
+      {
+        if (e.Key == Key.Escape && _vmRef.TryGetTarget(out var vm) && _textBoxRef.TryGetTarget(out var textBox))
+        {
+          vm.Value = "";
+          textBox.Focus();
+          e.Handled = true;
+        }
+      }
+    }
+
+    private void EnableSaveCancel()
+    {
+      saveButton.IsEnabled = true;
+      cancelButton.IsEnabled = true;
+    }
+
+    /* Handles property changes on VariableActionViewModels to enable the save button. */
+    private void OnVariableActionPropertyChanged(object sender, PropertyChangedEventArgs e)
+    {
+      // Any property change on a ViewModel means the user made an edit
+      EnableSaveCancel();
+    }
+
+    private void AddVariableActionClick(object sender, RoutedEventArgs e)
+    {
+      _variableActionViewModels.Add(VariableActionViewModel.CreateSilent(GenerateVariableName()));
+      EnableSaveCancel();
+      UpdateVariableActionsEmptyState();
+    }
+
+    private void DeleteVariableActionClick(object sender, RoutedEventArgs e)
+    {
+      if (sender is Button button && button.Tag is VariableActionViewModel viewModel)
+      {
+        _variableActionViewModels.Remove(viewModel);
+        EnableSaveCancel();
+        UpdateVariableActionsEmptyState();
+
+        // If last variable was removed, add a fresh starter card
+        if (_variableActionViewModels.Count == 0)
+        {
+          _variableActionViewModels.Add(VariableActionViewModel.CreateSilent(GenerateVariableName()));
+          UpdateVariableActionsEmptyState();
+        }
+      }
+    }
+
+    /* Only allow alphanumeric characters in variable names. */
+    private void VariableNamePreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+      e.Handled = !e.Text.All(char.IsLetterOrDigit);
+    }
+
   }
 }

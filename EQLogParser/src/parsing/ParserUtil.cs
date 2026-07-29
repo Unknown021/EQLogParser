@@ -79,9 +79,6 @@ namespace EQLogParser
     /// <summary>
     /// Updates the defender name: replaces "You"/"Your" with player name, or third-person with attacker.
     /// </summary>
-    /// <param name="defender">The current defender name</param>
-    /// <param name="attacker">The attacker name (used to replace third-person names)</param>
-    /// <returns>The updated defender name in uppercase</returns>
     internal static string UpdateDefender(string defender, string attacker)
     {
       defender = ReplacePlayer(defender, ConfigUtil.PlayerName, attacker);
@@ -128,7 +125,7 @@ namespace EQLogParser
       for (var i = 0; i < count; i++)
       {
         var word = split[start + i];
-        if (word != null && word.Length > 0)
+        if (word is { Length: > 0 })
         {
           totalLength += word.Length;
           wordCount++;
@@ -147,7 +144,7 @@ namespace EQLogParser
         for (var i = 0; i < count; i++)
         {
           var word = split[start + i];
-          if (word != null && word.Length > 0)
+          if (word is { Length: > 0 })
           {
             if (!first)
             {
@@ -189,6 +186,7 @@ namespace EQLogParser
         "backstab" => "backstabs",
         "bite" => "bites",
         "claw" => "claws",
+        "cleave" => "cleaves",
         "crush" => "crushes",
         "frenzy" => "frenzies",
         "gore" => "gores",
@@ -198,19 +196,21 @@ namespace EQLogParser
         "maul" => "mauls",
         "punch" => "punches",
         "pierce" => "pierces",
+        "reave" => "reaves",
         "rend" => "rends",
         "shoot" => "shoots",
         "slash" => "slashes",
         "slam" => "slams",
         "slice" => "slices",
         "smash" => "smashes",
+        "smite" => "smites",
         "stab" => "stabs",
         "sting" => "stings",
         "strike" => "strikes",
         "sweep" => "sweeps",
-        "bashes" or "backstabs" or "bites" or "claws" or "crushes" or "frenzies" or
-        "gores" or "hits" or "kicks" or "learns" or "mauls" or "punches" or "pierces" or
-        "rends" or "shoots" or "slashes" or "slams" or "slices" or "smashes" or "stabs" or
+        "bashes" or "backstabs" or "bites" or "claws" or "cleaves" or "crushes" or "frenzies" or
+        "gores" or "hits" or "kicks" or "learns" or "mauls" or "punches" or "pierces" or "reaves" or
+        "rends" or "shoots" or "slashes" or "slams" or "slices" or "smashes" or "smites" or "stabs" or
         "stings" or "strikes" or "sweeps" => word,
         _ => null
       };

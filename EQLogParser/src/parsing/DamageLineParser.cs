@@ -19,10 +19,8 @@ namespace EQLogParser
     private static double _slainTime = double.NaN;
     private static string _previousAction;
     private static DelayRecord _delayCritRecord;
-    internal static IEQDataStore DataManager;
     internal static IFightManager FightManager;
 
-    private static IEQDataStore DM => DataManager ?? EQLogParser.EQDataStore.Instance;
     private static IFightManager FM => FightManager ?? EQLogParser.FightManager.Instance;
 
     private static readonly List<string> ChestTypes =
@@ -456,7 +454,7 @@ namespace EQLogParser
         {
           var damage = ParserUtil.ParseUInt(split, extraIndex + 1);
           var spell = ParserUtil.JoinWords(split, fromDamage + 3, stop - fromDamage - 3);
-          var spellData = DM.GetDamagingSpellByName(spell);
+          var spellData = EQDataStore.Instance.GetDamagingSpellByName(spell);
           resist = spellData?.Resist ?? SpellResist.Undefined;
           attacker = ParserUtil.UpdateAttacker(attacker, ConfigUtil.PlayerName, spell);
           defender = ParserUtil.UpdateDefender(defender, attacker);
@@ -480,7 +478,7 @@ namespace EQLogParser
         record = CreateDamageRecord(lineData, split, stop, attacker, defender, damage, Labels.Melee, subType);
 
         // handle old style crits for eqemu
-        if (record != null && _lastCrit != null && string.Equals(_lastCrit.Attacker, record.Attacker, StringComparison.OrdinalIgnoreCase) &&
+        if (record is not null && _lastCrit is not null && string.Equals(_lastCrit.Attacker, record.Attacker, StringComparison.OrdinalIgnoreCase) &&
           (lineData.BeginTime - _lastCrit.BeginTime) <= 1 && string.IsNullOrEmpty(_lastCrit.Value))
         {
           record.ModifiersMask = LineModifiersParser.Crit;
@@ -572,11 +570,11 @@ namespace EQLogParser
         if (!string.IsNullOrEmpty(attacker) && !string.IsNullOrEmpty(spell))
         {
           string type;
-          var spellData = DM.GetDamagingSpellByName(spell);
+          var spellData = EQDataStore.Instance.GetDamagingSpellByName(spell);
 
           // Old (eqemu) if attacker is actually a spell then swap attacker and spell
           // Spells don't change on eqemu servers so this should always be a spell even with old spell data
-          if (spellData == null && DM.IsOldSpell(attacker))
+          if (spellData == null && EQDataStore.Instance.IsOldSpell(attacker))
           {
             // check that we can't find a spell where the player name is
             (attacker, spell) = (spell, attacker);
@@ -607,7 +605,7 @@ namespace EQLogParser
         }
 
         var label = Labels.OtherDmg;
-        if (DM.GetDamagingSpellByName(spell) is { } spellData)
+        if (EQDataStore.Instance.GetDamagingSpellByName(spell) is { } spellData)
         {
           resist = spellData.Resist;
 
@@ -722,7 +720,7 @@ namespace EQLogParser
         record.AttackerOwner = record.AttackerOwner ?? attackerOwner;
 
         // handle old style crits for eqemu
-        if (record != null && _lastCrit != null && string.Equals(_lastCrit.Attacker, record.Attacker, StringComparison.OrdinalIgnoreCase) &&
+        if (record is not null && _lastCrit is not null && string.Equals(_lastCrit.Attacker, record.Attacker, StringComparison.OrdinalIgnoreCase) &&
           (lineData.BeginTime - _lastCrit.BeginTime) <= 1 && _lastCrit.Value?.Length > 2 &&
           _lastCrit.Value.AsSpan(1, _lastCrit.Value.Length - 2).SequenceEqual(split[pointsOfIndex - 1].AsSpan()))
         {
@@ -777,7 +775,7 @@ namespace EQLogParser
           attacker = ParserUtil.UpdateAttacker(attacker, ConfigUtil.PlayerName, Labels.Unk);
 
           var damageRecord = CreateDamageRecord(lineData, split, stop, attacker, Labels.Unk, damage, Labels.Melee, "Hits");
-          if (damageRecord != null)
+          if (damageRecord is not null)
           {
             damageRecord.ModifiersMask = LineModifiersParser.Crit;
           }
@@ -955,9 +953,9 @@ namespace EQLogParser
         }
       }
 
-      if (record != null)
+      if (record is not null)
       {
-        if (_delayCritRecord != null && (lineData.BeginTime - _delayCritRecord.BeginTime) <= 1 &&
+        if (_delayCritRecord is not null && (lineData.BeginTime - _delayCritRecord.BeginTime) <= 1 &&
           string.Equals(record.Attacker, _delayCritRecord.Record.Attacker, StringComparison.OrdinalIgnoreCase))
         {
           record.ModifiersMask = _delayCritRecord.Record.ModifiersMask;
@@ -1020,7 +1018,7 @@ namespace EQLogParser
 
     private static void UpdateSlain(string slain, string killer, LineData lineData)
     {
-      if (!string.IsNullOrEmpty(slain) && killer != null && !InIgnoreList(slain)) // killer may not be known so empty string is OK
+      if (!string.IsNullOrEmpty(slain) && killer is not null && !InIgnoreList(slain)) // killer may not be known so empty string is OK
       {
         killer = killer.Length > 2 ? ParserUtil.ReplacePlayer(killer, ConfigUtil.PlayerName, killer) : killer;
         slain = ParserUtil.ReplacePlayer(slain, ConfigUtil.PlayerName, slain);
@@ -1040,7 +1038,7 @@ namespace EQLogParser
           {
             // we also use upper case now
             slain = TextUtils.CapitalizeFirst(slain);
-            if (!SlainQueue.Contains(slain) && FM.GetFight(slain) != null)
+            if (!SlainQueue.Contains(slain) && FM.GetFight(slain) is not null)
             {
               SlainQueue.Add(slain);
               _slainTime = currentTime;
@@ -1048,7 +1046,7 @@ namespace EQLogParser
           }
 
           var death = new DeathRecord { Killed = StringCache.GetOrAdd(slain), Killer = StringCache.GetOrAdd(killer), Message = StringCache.GetOrAdd(lineData.Action) };
-          if (_previousAction != null)
+          if (_previousAction is not null)
           {
             death.Previous = _previousAction;
           }
@@ -1159,9 +1157,9 @@ namespace EQLogParser
         result = type;
         if (!string.IsNullOrEmpty(key))
         {
-          var spellName = DM.AbbreviateSpellName(name);
-          var data = DM.GetSpellByAbbrv(spellName);
-          if (data != null)
+          var spellName = EQDataStore.Instance.AbbreviateSpellName(name);
+          var data = EQDataStore.Instance.GetSpellByAbbrv(spellName);
+          if (data is not null)
           {
             if (data.Damaging == 2)
             {

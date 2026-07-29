@@ -1,5 +1,27 @@
 **Note that Windows 7/8 support will end by September this year**
 
+# 2.3.58 | 07/25/26
+1. Fix for alt timer name not seeing custom variables.
+2. Updated match variable to better handle string vs number values.
+3. Performance fixes.
+
+# 2.3.57 | 07/23/26
+1. **New Feature**. Added custom **Trigger Variables** to EQLP.
+2. **Details**. There is a new tab on the **Trigger** properties window. It allows for custom variables to be set or cleared when the trigger is activated. In addition, there is now a **Match Variables** property that can be used to test those variables to determine if a trigger should activate as well as a **End Clear Variables** that can be used when timers expire. See the documentation for details.
+
+# 2.3.56 | 07/12/26
+1. Reworked the **Damage Meter** controls/menu to display properly on displays with varied DPI settings.
+2. Fixed for DPS not being the default in **Damage Meter**.
+3. Updated spell data.
+
+# 2.3.55 | 06/13/26
+1. Updated Trigger variable **{TS}** to support DZ time format: 3d:10h:00m:10s.
+2. Updated **Trigger Search** to include comments, timer name, and all of the pattern fields.
+3. Added Collapse All and Expand All on the right-click menu for Damage Summary, Breakdowns, Randoms, and Taunt Views.
+4. Added EQL support for **cleave**, **reave**, and **smite**. Update was provided by **cord-b@github**
+5. Fix for Timer/Text Overlay window dispaly bug on Linux. Update was provided by **stvsu@github**
+6. More refactoring/cleanup so possible bugs expected.
+
 # 2.3.54 | 05/23/26
 1. Added right-click menu option to set a **Verified Player**.
 2. More updates to how pet/player info is saved.

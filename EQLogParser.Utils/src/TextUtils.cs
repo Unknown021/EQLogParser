@@ -1,13 +1,8 @@
-using DotLiquid;
-using log4net;
-using Microsoft.VisualBasic.FileIO;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -15,7 +10,6 @@ namespace EQLogParser
 {
   internal static class TextUtils
   {
-    private static readonly ILog Log = LogManager.GetLogger(MethodBase.GetCurrentMethod()?.DeclaringType);
     private const string BbCellHeader = "  [td]{0}    [/td]";
     private const string BbCellBody = "[td][right]{0}   [/right][/td]";
     private const string BbCellFirst = "[td]{0}[/td]";
@@ -109,7 +103,7 @@ namespace EQLogParser
       }
 
       using var reader = new StringReader(data);
-      using var parser = new TextFieldParser(reader)
+      using var parser = new Microsoft.VisualBasic.FileIO.TextFieldParser(reader)
       {
         HasFieldsEnclosedInQuotes = true,
         TrimWhiteSpace = false
@@ -124,9 +118,9 @@ namespace EQLogParser
           rows.Add(parser.ReadFields() ?? []);
         }
       }
-      catch (MalformedLineException ex)
+      catch (Microsoft.VisualBasic.FileIO.MalformedLineException ex)
       {
-        Log.Error($"Invalid TSV data at line {parser.ErrorLineNumber}: {parser.ErrorLine}", ex);
+        ExceptionUtil.GlobalLogError?.Invoke(ex);
       }
 
       return rows;
@@ -203,70 +197,6 @@ namespace EQLogParser
       return sb.ToString();
     }
 
-    internal static void SaveHtml(string selectedFileName, Dictionary<string, SummaryTable> tables)
-    {
-      var headerTemplate = Template.Parse(File.ReadAllText(@"data\html\header.html"));
-      var tableKeys = tables.Keys.OrderBy(key => key);
-      var tablechoices = new List<object>();
-
-      foreach (var key in tableKeys)
-      {
-        tablechoices.Add(new { type = key, title = tables[key].GetTitle() });
-      }
-
-      var headerValue = headerTemplate.Render(Hash.FromAnonymousObject(new { tablechoices }), CultureInfo.CurrentCulture);
-      File.WriteAllText(selectedFileName, headerValue);
-
-      var contentTemplate = Template.Parse(File.ReadAllText(@"data\html\content.html"));
-      foreach (var key in tableKeys)
-      {
-        var headers = tables[key].GetHeaders();
-        var playerStats = tables[key].GetPlayerStats();
-        var isPetsCombined = tables[key].IsPetsCombined();
-
-        var columns = headers.Select(header => header[1]).ToList();
-        var rows = new List<object>();
-        foreach (var stats in playerStats)
-        {
-          var data = new List<object>();
-          foreach (var column in headers.Skip(1))
-          {
-            var value = stats.GetType().GetProperty(column[0])?.GetValue(stats, null);
-            if (column[1].Contains('%'))
-            {
-              if (value is double and 0)
-              {
-                value = "-";
-              }
-            }
-            else if (value is not string)
-            {
-              value = $"{value:n0}";
-            }
-
-            data.Add(value);
-          }
-
-          var isChild = stats.IsTopLevel == false && isPetsCombined;
-          var row = new
-          {
-            rank = isChild ? "" : stats.Rank.ToString(),
-            ischild = isChild,
-            haschild = stats.Name.Contains(" +Pets"),
-            data
-          };
-
-          rows.Add(row);
-        }
-
-        var content = contentTemplate.Render(Hash.FromAnonymousObject(new { columns, rows, tableid = key }), CultureInfo.CurrentCulture);
-        File.AppendAllText(selectedFileName, content);
-      }
-
-      var footer = File.ReadAllText(@"data\html\footer.html");
-      File.AppendAllText(selectedFileName, footer);
-    }
-
     internal static string Trim(string value)
     {
       if (value != null)
@@ -314,7 +244,6 @@ namespace EQLogParser
       return validLength > 0 ? span[..validLength].ToString() : string.Empty;
     }
 
-    [DebuggerHidden]
     internal static bool IsValidRegex(string pattern)
     {
       var pass = true;
@@ -334,7 +263,7 @@ namespace EQLogParser
       return pass;
     }
 
-    internal static bool SnapshotMatches(MatchCollection mc, out Dictionary<string, string> matches)
+    internal static bool SnapshotMatches(System.Text.RegularExpressions.MatchCollection mc, out Dictionary<string, string> matches)
     {
       matches = null;
 
@@ -346,7 +275,7 @@ namespace EQLogParser
       var success = mc.Count > 0;
       matches = success ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) : null;
 
-      foreach (Match m in mc)
+      foreach (System.Text.RegularExpressions.Match m in mc)
       {
         if (m.Success)
         {
@@ -381,6 +310,78 @@ namespace EQLogParser
       }
 
       return value;
+    }
+
+    /* Fast allocation-free double parser for condition evaluation. Handles optional
+     * leading sign, integer part, and fractional part. Returns defValue (NaN) on
+     * any parse failure — no CultureInfo or exception overhead like double.TryParse. */
+    internal static double ParseDouble(ReadOnlySpan<char> span, double defValue = double.NaN)
+    {
+      if (span.IsEmpty)
+        return defValue;
+
+      var index = 0;
+      var negative = false;
+
+      // Optional sign
+      if (span[0] == '-')
+      {
+        negative = true;
+        index = 1;
+      }
+      else if (span[0] == '+')
+      {
+        index = 1;
+      }
+
+      if (index >= span.Length)
+        return defValue;
+
+      // Integer part — parse as ulong to avoid precision loss on large integers
+      ulong intPart = 0;
+      var hasDigits = false;
+
+      while (index < span.Length && span[index] != '.')
+      {
+        var digit = (uint)(span[index] - '0');
+        if (digit > 9)
+          return defValue;
+
+        // Overflow guard for ulong
+        if (intPart > ulong.MaxValue / 10 || (intPart == ulong.MaxValue / 10 && digit > 5))
+          return defValue;
+
+        intPart = intPart * 10 + digit;
+        hasDigits = true;
+        index++;
+      }
+
+      double result = intPart;
+
+      // Fractional part
+      if (index < span.Length && span[index] == '.')
+      {
+        index++;
+        var scale = 0.1;
+
+        while (index < span.Length)
+        {
+          var digit = (uint)(span[index] - '0');
+          if (digit > 9)
+            return defValue;
+
+          result += digit * scale;
+          scale *= 0.1;
+          hasDigits = true;
+          index++;
+        }
+      }
+
+      // Must have consumed all characters and had at least one digit
+      if (index < span.Length || !hasDigits)
+        return defValue;
+
+      return negative ? -result : result;
     }
 
     internal static string ReplaceWholeWords(string input, IReadOnlyDictionary<string, string> replacements)

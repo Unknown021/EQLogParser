@@ -2,7 +2,6 @@ obj/
 bin/
 tmp/
 .vscode/
-sign.cmd
 .aider*
 .opencode
 /.vs

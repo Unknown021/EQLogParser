@@ -1,0 +1,74 @@
+namespace EQLogParser
+{
+  /* Token types for the variable condition expression language. */
+  public enum ConditionTokenType
+  {
+    End,
+    Variable,       // {name}
+    String,         // "hello" or 'hello' or bareword
+    Number,         // 123, -42, 12.5
+    Boolean,        // true / false
+    Null,           // null
+
+    Equals,         // = == eq
+    NotEquals,      // != <> neq
+    Greater,        // > gt
+    GreaterEqual,   // >= ge gte
+    Less,           // < lt
+    LessEqual,      // <= le lte
+    Contains,       // contains
+
+    And,            // and &&
+    Or,             // or ||
+    Not,            // not !
+
+    LeftParen,      // (
+    RightParen,     // )
+  }
+
+  /* A single token produced by the condition expression tokenizer. */
+  public readonly struct ConditionToken
+  {
+    public ConditionTokenType Type { get; }
+    public string RawText { get; }  // null when not applicable (e.g. End token)
+    public string VariableName { get; }  // Set when Type == Variable, null otherwise
+    public double NumberValue { get; }     // Set when Type == Number
+    public bool BooleanValue { get; }      // Set when Type == Boolean
+
+    public ConditionToken(ConditionTokenType type, string rawText)
+    {
+      Type = type;
+      RawText = rawText;
+      VariableName = null;
+      NumberValue = 0;
+      BooleanValue = false;
+    }
+
+    public ConditionToken(ConditionTokenType type, string rawText, string variableName)
+    {
+      Type = type;
+      RawText = rawText;
+      VariableName = variableName;
+      NumberValue = 0;
+      BooleanValue = false;
+    }
+
+    public ConditionToken(ConditionTokenType type, string rawText, double numberValue)
+    {
+      Type = type;
+      RawText = rawText;
+      VariableName = null;
+      NumberValue = numberValue;
+      BooleanValue = false;
+    }
+
+    public ConditionToken(ConditionTokenType type, string rawText, bool booleanValue)
+    {
+      Type = type;
+      RawText = rawText;
+      VariableName = null;
+      NumberValue = 0;
+      BooleanValue = booleanValue;
+    }
+  }
+}

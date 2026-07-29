@@ -961,22 +961,34 @@ namespace EQLogParser
       }
     }
 
-    private static double CalcProgress(int type, long duration, long remaining, long max)
-    {
-      var denom = max == long.MinValue ? duration : max;
-      if (denom <= 0) return 0.0;
-
-      var p = (double)remaining / denom * 100.0;
-      if (type == 3 && max != long.MinValue && duration > 0)
-        p += (1 - ((double)duration / max)) * 100.0;
-
-      if (double.IsNaN(p) || double.IsInfinity(p)) return 0.0;
-      return Math.Clamp(p, 0.0, 100.0);
-    }
-
-    private static string GetDisplayName(TimerData timerData)
+    /* Resolve the display name for a timer bar.
+     *
+     * Variable resolution order (highest → lowest precedence):
+     *   1. Built-in codes: {counter}, {repeated}, {logtime}
+     *   2. Custom variables from timerData.Variables
+     *
+     * The line code {l} is resolved into the template at timer-creation time and
+     * always references the log action that started the timer — it does not update
+     * dynamically during the timer's lifetime.
+     *
+     * This method is called only during full renders (~450ms interval). Short ticks
+     * reuse the display name from the cached TimerBarModel. No additional rate-limiting
+     * is needed — the render cycle provides natural throttling.
+     */
+    internal static string GetDisplayName(TimerData timerData)
     {
       var result = timerData.DisplayName;
+      var hasTemplateVars = !string.IsNullOrEmpty(timerData.DisplayNameTemplate) &&
+          timerData.Variables is not null &&
+          timerData.DisplayNameTemplate.Contains('{');
+
+      // If the timer has a template with custom variables, re-resolve from live values
+      if (hasTemplateVars)
+      {
+        result = timerData.DisplayNameTemplate;
+      }
+
+      // Built-in codes first (highest priority)
       if (timerData.RepeatedCount > -1)
       {
         result = result.Replace(TriggerProcessor.RepeatedCode, $"{timerData.RepeatedCount}", StringComparison.OrdinalIgnoreCase);
@@ -992,12 +1004,38 @@ namespace EQLogParser
         result = result.Replace(TriggerProcessor.LogTimeCode, timerData.LogTime, StringComparison.OrdinalIgnoreCase);
       }
 
+      // Custom variables last (lowest priority)
+      if (hasTemplateVars)
+      {
+        result = TriggerProcessor.ProcessMatchesText(result, timerData.Variables);
+      }
+
       return result;
+    }
+
+    private static double CalcProgress(int type, long duration, long remaining, long max)
+    {
+      var denom = max == long.MinValue ? duration : max;
+      if (denom <= 0) return 0.0;
+
+      var p = (double)remaining / denom * 100.0;
+      if (type == 3 && max != long.MinValue && duration > 0)
+        p += (1 - ((double)duration / max)) * 100.0;
+
+      if (double.IsNaN(p) || double.IsInfinity(p)) return 0.0;
+      return Math.Clamp(p, 0.0, 100.0);
     }
 
     private string FormatTime(long ticks)
     {
-      var format = _showMillis ? DateUtil.TimeFormat.HMSMsCompact : DateUtil.TimeFormat.HMSCompact;
+      var showDays = ticks >= TimeSpan.TicksPerDay;
+      var format = (_showMillis, showDays) switch
+      {
+        (true, true) => DateUtil.TimeFormat.DHMSMsCompact,
+        (true, false) => DateUtil.TimeFormat.HMSMsCompact,
+        (false, true) => DateUtil.TimeFormat.DHMSCompact,
+        (false, false) => DateUtil.TimeFormat.HMSCompact
+      };
       return DateUtil.FormatTicks(ticks, format);
     }
 

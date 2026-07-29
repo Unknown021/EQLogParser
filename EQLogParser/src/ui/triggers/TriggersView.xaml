@@ -6,10 +6,17 @@
              xmlns:syncfusion="http://schemas.syncfusion.com/wpf"
              xmlns:fa="http://schemas.fontawesome.com/icons/"
              xmlns:local="clr-namespace:EQLogParser"
+             xmlns:NumberFormat="clr-namespace:System.Globalization;assembly=mscorlib"
+             xmlns:sys="clr-namespace:System;assembly=mscorlib"
              Initialized="TriggersViewOnInitialized"
              Loaded="ContentLoaded"
              mc:Ignorable="d" 
              d:DesignHeight="450" d:DesignWidth="800">
+  <UserControl.Resources>
+    <!-- Variable input width - can be themed if needed -->
+    <sys:Double x:Key="VariableInputWidth">160</sys:Double>
+  </UserControl.Resources>
+
   <Grid>
     <Grid.RowDefinitions>
       <RowDefinition Height="{DynamicResource EQGridTitleHeight}"></RowDefinition>
@@ -90,7 +97,7 @@
           </Border>
         </Grid>
         <syncfusion:TabControlExt Grid.Row="1" x:Name="propertyTabControl" Margin="4,0,0,0" TabStripPlacement="Top" CloseButtonType="Hide" EnableLabelEdit="False" AllowDragDrop="False" ShowTabItemContextMenu="False" TabListContextMenuOptions="None">
-          <syncfusion:TabItemExt x:Name="generalPropertyGridTab" Header="Trigger Properties" Height="30" FontSize="{DynamicResource EQTitleSize}">
+          <syncfusion:TabItemExt x:Name="generalPropertyGridTab" Header="Trigger Properties" Height="28" FontSize="{DynamicResource EQTitleSize}">
             <syncfusion:PropertyGrid
               x:Name="generalPropertyGrid"
               BorderBrush="{DynamicResource ContentBackgroundAlt2}"
@@ -118,6 +125,7 @@
                 <syncfusion:PropertyGridItem CategoryName="Basic Trigger Options" x:Name="previousPatternItem" PropertyName="PreviousPattern" DisplayName="Match Previous Line" Description="Text of the previous line to match on. It is the line directly before the current line in the log file. See the documentation on Using Trigger Variables for additional information."/>
 				<syncfusion:PropertyGridItem CategoryName="Basic Trigger Options" x:Name="windowPatternItem" PropertyName="WindowPattern" DisplayName="Window Pattern" Description="Text for the trigger window to match on. If provided, this trigger will not activate unless within the trigger window duration. The trigger window begins when a trigger window match is encountered. See the documentation on Using Trigger Variables for additional information."/>
 				<syncfusion:PropertyGridItem CategoryName="Basic Trigger Options" PropertyName="WindowTime" DisplayName="Window Duration" Description="The time in seconds that the trigger window will last for.  Because this uses the log timestamps only whole seconds can be used."/>
+                <syncfusion:PropertyGridItem CategoryName="Basic Trigger Options" x:Name="matchVariableConditionItem" PropertyName="MatchVariableCondition" DisplayName="Match Variables" Description="Optional condition evaluated after the pattern matches. The trigger only fires if this expression is true.\n\nSyntax: {var} OP value\n  Operators: = == eq != &lt;&gt; neq &gt; ge gte &lt; le lte contains\n  Boolean: and &amp;&amp; or || not !\n  Literals: numbers (42, -3.5), strings (hello, 'quoted text'), true/false, null\n  Parentheses for grouping: ({hp} &gt; 50 and {mana} &gt; 10) or {godmode}\n\nExamples:\n  {hp} &gt; 50\n  {name} contains dragon\n  {s} = null (true when variable is unset)\n  ({hp} &gt; 50 and {mana} &gt; 10) or {godmode} = true"/>
                 <syncfusion:PropertyGridItem CategoryName="Basic Trigger Options" PropertyName="Priority" DisplayName="Priority" Description="Priority used to determine if speech for a Trigger may be interrupted. The highest priority is 1 and lowest is 5. Interruptions may happen any time a higher priority trigger needs to play while a lower priority trigger has not finished."/>
                 <syncfusion:PropertyGridItem CategoryName="Basic Trigger Options" PropertyName="RepeatedResetTime" DisplayName="Repeated Reset Time (s)" Description="The time in seconds when the {repeated} count and {counter} are reset. See the documentation on Using Trigger Variables for additional information."/>
                 <syncfusion:PropertyGridItem CategoryName="Basic Trigger Options" x:Name="timerTypeItem" PropertyName="TimerType" DisplayName="Start a Timer" Description="Select the Type of Timer to associate with this Trigger. Countdown is a standard Timer. Fast Countdown has fewer options but is optimized for short time intervals. Progress Timers increase in value as time passes but work the same as standard Countdown timers in other aspects."/>
@@ -168,7 +176,248 @@
               </syncfusion:PropertyGrid.Items>
             </syncfusion:PropertyGrid>
           </syncfusion:TabItemExt>
-          <syncfusion:TabItemExt x:Name="secondaryPropertyGridTab" Header="Trigger Timer Properties" Height="30" FontSize="{DynamicResource EQTitleSize}" Visibility="Collapsed">
+          <syncfusion:TabItemExt x:Name="variableActionsTab" Header="Trigger Variables" Height="28" FontSize="{DynamicResource EQTitleSize}" Visibility="Collapsed">
+            <ScrollViewer Padding="8" VerticalScrollBarVisibility="Auto">
+              <StackPanel>
+                <!-- #12: Explain variable scope -->
+                <Border Margin="0,0,0,12" BorderThickness="1" BorderBrush="{DynamicResource ContentBackgroundAlt2}" Padding="8,6">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                      </Grid.ColumnDefinitions>
+                      <fa:ImageAwesome Grid.Column="0" Icon="Solid_InfoCircle" Foreground="{DynamicResource EQMenuIconBrush}"
+                        VerticalAlignment="Center" Width="16" Height="16" Margin="0,0,12,0" />
+                    <TextBlock Grid.Column="1" Text="Variables let triggers pass values to other triggers. Here you can add multiple variables, each with a different name, and set or clear their values. You can then reference these variables in Sound, Text to Display, and other fields. See the Documentation for more info."
+                        TextWrapping="Wrap" VerticalAlignment="Center"
+                        FontSize="{DynamicResource EQContentSizePlus}" />
+                    </Grid>
+                  </Border>
+
+                <!-- Empty State (hidden when starter card is shown) -->
+                <StackPanel x:Name="variableActionsEmptyState" Visibility="Collapsed" Margin="0,24,0,12">
+                  <TextBlock Text="No variables configured."
+                    HorizontalAlignment="Center" FontSize="{DynamicResource EQTitleSize}"
+                    FontWeight="Bold" Margin="0,0,0,8" />
+                  <TextBlock Text="Variables allow this trigger to pass values to other triggers."
+                    HorizontalAlignment="Center" TextWrapping="Wrap"
+                    FontSize="{DynamicResource EQContentSize}" Margin="0,0,0,16" />
+                  <Button Content="+ Add Variable" Click="AddVariableActionClick"
+                    HorizontalAlignment="Center" Padding="24,0,24,0"
+                    Height="{DynamicResource EQButtonHeight}" />
+                </StackPanel>
+
+                <!-- Variable Action Cards: wrap with max-width -->
+                <ItemsControl x:Name="variableActionsList">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <WrapPanel />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <!-- Each variable is a card with max width -->
+                      <Border BorderThickness="1" BorderBrush="{DynamicResource ContentBackgroundAlt2}" Padding="12" Margin="0,0,8,8" MinWidth="340" MaxWidth="680"
+                              Loaded="VariableActionRowLoaded">
+                        <StackPanel>
+                          <!-- Visual variable syntax with decorative braces -->
+                          <StackPanel Margin="0,0,0,8">
+                            <TextBlock Text="Variable Name" FontWeight="SemiBold" FontSize="{DynamicResource EQContentSize}"
+                              Foreground="{DynamicResource ContentForeground}" Margin="0,0,0,4" />
+                            <Border BorderThickness="1" BorderBrush="{DynamicResource ContentBackgroundAlt2}" Padding="6,2">
+                              <StackPanel Orientation="Horizontal">
+                                <TextBlock VerticalAlignment="Center" FontSize="{DynamicResource EQTitleSize}" FontWeight="Bold"
+                                  Foreground="{DynamicResource ContentForeground}" Margin="0,0,2,0">
+                                  <TextBlock.Text>
+                                    <sys:String>{</sys:String>
+                                  </TextBlock.Text>
+                                </TextBlock>
+                                <TextBox x:Name="variableNameBox" Width="{DynamicResource VariableInputWidth}" BorderThickness="0" Background="Transparent" VerticalContentAlignment="Center"
+                                  Text="{Binding VariableName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                  PreviewTextInput="VariableNamePreviewTextInput" />
+                                <TextBlock VerticalAlignment="Center" FontSize="{DynamicResource EQTitleSize}" FontWeight="Bold"
+                                  Foreground="{DynamicResource ContentForeground}" Margin="2,0,0,0">
+                                  <TextBlock.Text>
+                                    <sys:String>}</sys:String>
+                                  </TextBlock.Text>
+                                </TextBlock>
+                              </StackPanel>
+                            </Border>
+                          </StackPanel>
+
+                          <!-- Action selector -->
+                          <StackPanel Margin="0,2,0,8">
+                            <TextBlock Text="Action" FontWeight="SemiBold" FontSize="{DynamicResource EQContentSize}"
+                              Foreground="{DynamicResource ContentForeground}" Margin="0,0,0,4" />
+                            <ComboBox ItemsSource="{Binding ActionTypes}" 
+                              SelectedItem="{Binding ActionTypeDisplay, Mode=TwoWay}" Padding="6,4" />
+                          </StackPanel>
+
+                          <!-- Type selector (visible when Action=Set) -->
+                          <StackPanel x:Name="typePanel" Margin="0,2,0,8">
+                            <TextBlock Text="Type" FontWeight="SemiBold" FontSize="{DynamicResource EQContentSize}"
+                              Foreground="{DynamicResource ContentForeground}" Margin="0,0,0,4" />
+                            <ComboBox ItemsSource="{Binding DataTypes}" 
+                              SelectedItem="{Binding DataTypeDisplay, Mode=TwoWay}" Padding="6,4" />
+                            <StackPanel.Style>
+                              <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                  <DataTrigger Binding="{Binding IsSetAction}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                  </DataTrigger>
+                                </Style.Triggers>
+                              </Style>
+                            </StackPanel.Style>
+                          </StackPanel>
+
+                          <!-- Value field (visible when Action=Set and Type=Value) -->
+                          <StackPanel x:Name="valuePanel" Margin="0,2,0,8">
+                            <TextBlock x:Name="valueLabel" Text="Fixed Value (text/number)" FontWeight="SemiBold" FontSize="{DynamicResource EQContentSize}"
+                              Foreground="{DynamicResource ContentForeground}" Margin="0,0,0,4" />
+                            <Border BorderThickness="1" BorderBrush="{DynamicResource ContentBackgroundAlt2}" Padding="6,0">
+                              <Grid>
+                                <TextBox x:Name="valueTextBox"
+                                  Text="{Binding Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                  ToolTip="Enter text or use {s1}, {n1}, ${varName} to reference capture groups or other variables"
+                                  BorderThickness="0" Padding="0,4" />
+                                <TextBlock Text="example value {s1}"
+                                  Margin="2,0,0,0"
+                                  VerticalAlignment="Center"
+                                  Foreground="{DynamicResource PlaceholderForeground}"
+                                  FontStyle="Italic"
+                                  IsHitTestVisible="False"
+                                  Panel.ZIndex="1">
+                                  <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                      <Setter Property="Visibility" Value="Collapsed" />
+                                      <Style.Triggers>
+                                        <MultiDataTrigger>
+                                          <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding IsValueEmpty}" Value="True" />
+                                            <Condition Binding="{Binding ElementName=valueTextBox, Path=IsFocused}" Value="False" />
+                                          </MultiDataTrigger.Conditions>
+                                          <Setter Property="Visibility" Value="Visible" />
+                                        </MultiDataTrigger>
+                                      </Style.Triggers>
+                                    </Style>
+                                  </TextBlock.Style>
+                                </TextBlock>
+                              </Grid>
+                            </Border>
+                            <StackPanel.Style>
+                              <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                  <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                      <Condition Binding="{Binding IsSetAction}" Value="True" />
+                                      <Condition Binding="{Binding IsValueType}" Value="True" />
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Visibility" Value="Visible" />
+                                  </MultiDataTrigger>
+                                </Style.Triggers>
+                              </Style>
+                            </StackPanel.Style>
+                          </StackPanel>
+
+                          <!-- Counter fields (visible when Action=Set and Type=Counter) -->
+                          <StackPanel x:Name="counterFieldsPanel" Margin="0,2,0,8">
+                            <Grid>
+                              <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                              </Grid.ColumnDefinitions>
+                              <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                <TextBlock Text="Start At" FontWeight="SemiBold" FontSize="{DynamicResource EQContentSize}"
+                                  Foreground="{DynamicResource ContentForeground}" Margin="0,0,0,4" />
+                                <Border BorderThickness="1" BorderBrush="{DynamicResource ContentBackgroundAlt2}" Padding="6,0">
+                                  <syncfusion:UpDown x:Name="initialValueBox" Value="{Binding InitialValue, Mode=TwoWay}" Padding="0,2"
+                                  MinValue="-999999" MaxValue="999999" BorderThickness="0"
+                                  ApplyZeroColor="False"  Margin="0">
+                                    <syncfusion:UpDown.NumberFormatInfo>
+                                      <NumberFormat:NumberFormatInfo NumberDecimalDigits="0" />
+                                    </syncfusion:UpDown.NumberFormatInfo>
+                                  </syncfusion:UpDown>
+                                </Border>
+                              </StackPanel>
+                              <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                                <TextBlock Text="Increment By" FontWeight="SemiBold" FontSize="{DynamicResource EQContentSize}"
+                                  Foreground="{DynamicResource ContentForeground}" Margin="0,0,0,4" />
+                                <Border BorderThickness="1" BorderBrush="{DynamicResource ContentBackgroundAlt2}" Padding="6,0">
+                                  <syncfusion:UpDown x:Name="stepBox" Value="{Binding Step, Mode=TwoWay}" Padding="0,2"
+                                  MinValue="-999999" MaxValue="999999" BorderThickness="0" ApplyZeroColor="False" Margin="0">
+                                    <syncfusion:UpDown.NumberFormatInfo>
+                                      <NumberFormat:NumberFormatInfo NumberDecimalDigits="0" />
+                                    </syncfusion:UpDown.NumberFormatInfo>
+                                  </syncfusion:UpDown>
+                                </Border>
+                              </StackPanel>
+                            </Grid>
+                            <StackPanel.Style>
+                              <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                  <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                      <Condition Binding="{Binding IsSetAction}" Value="True" />
+                                      <Condition Binding="{Binding IsCounterType}" Value="True" />
+                                    </MultiDataTrigger.Conditions>
+                                    <MultiDataTrigger.Setters>
+                                      <Setter Property="Visibility" Value="Visible" />
+                                    </MultiDataTrigger.Setters>
+                                  </MultiDataTrigger>
+                                </Style.Triggers>
+                              </Style>
+                            </StackPanel.Style>
+                          </StackPanel>
+
+                          <!-- Time to Live field (visible when Action=Set, for both Value and Counter) -->
+                          <StackPanel x:Name="ttlPanel" Margin="0,2,0,8">
+                            <TextBlock Text="Time to Live (seconds, 0=never expires)" FontWeight="SemiBold" FontSize="{DynamicResource EQContentSize}"
+                              Foreground="{DynamicResource ContentForeground}" Margin="0,0,0,4" />
+                            <Border BorderThickness="1" BorderBrush="{DynamicResource ContentBackgroundAlt2}" Padding="6,0">
+                              <syncfusion:UpDown x:Name="ttlBox" Value="{Binding TimeToLiveSeconds, Mode=TwoWay}" Padding="0,2"
+                              MinValue="0" MaxValue="999999" BorderThickness="0" ApplyZeroColor="False" Margin="0">
+                                <syncfusion:UpDown.NumberFormatInfo>
+                                  <NumberFormat:NumberFormatInfo NumberDecimalDigits="0" />
+                                </syncfusion:UpDown.NumberFormatInfo>
+                              </syncfusion:UpDown>
+                            </Border>
+                            <StackPanel.Style>
+                              <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                  <DataTrigger Binding="{Binding IsSetAction}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                  </DataTrigger>
+                                </Style.Triggers>
+                              </Style>
+                            </StackPanel.Style>
+                          </StackPanel>
+
+                          <!-- Remove button at bottom -->
+                          <Button Content="Remove"
+                            Click="DeleteVariableActionClick"
+                            Tag="{Binding}"
+                            HorizontalAlignment="Right" Padding="10,0,10,0" Margin="0,8,0,0"
+                            Height="{DynamicResource EQButtonHeight}" />
+                        </StackPanel>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- Add Variable button under the cards -->
+                <Button x:Name="addVariableButton" Content="+ Add Variable"
+                  Click="AddVariableActionClick"
+                  HorizontalAlignment="Left" Padding="10,0,10,0" Margin="0,8,0,0"
+                  Height="{DynamicResource EQButtonHeight}" />
+
+              </StackPanel>
+            </ScrollViewer>
+          </syncfusion:TabItemExt>
+          <syncfusion:TabItemExt x:Name="secondaryPropertyGridTab" Header="Trigger Timer Properties" Height="28" FontSize="{DynamicResource EQTitleSize}" Visibility="Collapsed">
             <syncfusion:PropertyGrid
               x:Name="secondaryPropertyGrid"
               BorderBrush="{DynamicResource ContentBackgroundAlt2}"
@@ -203,6 +452,7 @@
                 <syncfusion:PropertyGridItem CategoryName="Basic Timer Options" x:Name="timerShortDurationItem" PropertyName="DurationSeconds" DisplayName="Duration (0.2s -> 2.0s)" Visibility="Collapsed" Description="Number of Milliseconds after the Trigger has been executed before the Timer completes." />
                 <syncfusion:PropertyGridItem CategoryName="Basic Timer Options" PropertyName="EndSoundOrText" DisplayName="End Sound/Text to Speak"  Visibility="Collapsed" Description="The Phrase to be spoken or sound file to play at completion of the Timer. For additional wav files, copy them to Program Files\EQLogParser\data\sounds. Also, see the documentation on Using Trigger Variables for additional information."/>
                 <syncfusion:PropertyGridItem CategoryName="Basic Timer Options" PropertyName="EndTextToDisplay" DisplayName="End Text to Display" Description="The Text to Display in a Text Overlay at completion of the Timer. See the documentation on Using Trigger Variables for additional information."/>
+                <syncfusion:PropertyGridItem CategoryName="Basic Timer Options" PropertyName="EndTimerClearVariables" DisplayName="End Clear Variables" Description="Comma or space separated list of variable names to clear when the Timer ends (both normally and early). Accepts formats like 'test', '{test}', '${test}', or 'var1, var2'. Variables are cleared after End Text is evaluated so display text can still reference them. See the documentation on Using Trigger Variables for additional information."/>
                 <syncfusion:PropertyGridItem CategoryName="Basic Timer Options" PropertyName="TriggerAgainOption" DisplayName="If Triggered Again" Visibility="Collapsed" Description="What to do if the Trigger is matched a second time but the original Timer has not completed."/>
                 <syncfusion:PropertyGridItem CategoryName="Basic Timer Options" x:Name="resetDurationItem" PropertyName="ResetDurationTimeSpan" DisplayName="Reset Duration (hh:mm:ss)" Visibility="Collapsed" Description="Number of Minutes/Seconds required for the Timer to fully Reset if using a Timer Overlay configured as Cooldown. This is Primary Trigger Optionsly your cooldown time on an ability. Cooldown Overlays allow for a Timer that cycles through three states. Active, Reset, and and Idle/Waiting where each may have different colors." />
                 <syncfusion:PropertyGridItem CategoryName="Basic Timer Options" x:Name="loopingTimerItem" PropertyName="TimesToLoop" DisplayName="Times to Loop" Visibility="Collapsed" Description="Number of times the Timer should loop or automatically restart." />

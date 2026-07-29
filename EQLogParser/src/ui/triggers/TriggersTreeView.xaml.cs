@@ -3,6 +3,7 @@ using FontAwesome5;
 using Syncfusion.UI.Xaml.TreeView;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -271,15 +272,25 @@ namespace EQLogParser
     {
       if (GetTreeViewFromMenu(sender) is { SelectedItem: TriggerTreeViewNode node } treeView)
       {
-        if (treeView == triggerTreeView)
+        var triggers = treeView == triggerTreeView;
+        var filePath = TriggerUtil.SelectImportFile(node.SerializedData, triggers);
+        if (filePath is null) return;
+
+        var fileName = Path.GetFileName(filePath);
+        var progressWindow = new MessageWindow($"Loading Triggers from {fileName}", "Import Triggers", MessageWindow.IconType.Info, noButtons: true);
+        progressWindow.Show();
+
+        try
         {
-          await TriggerUtil.ImportTriggers(node.SerializedData);
-          await RefreshTriggerNode();
+          await TriggerUtil.ProcessImportFile(filePath, node.SerializedData, triggers);
+          if (triggers)
+            await RefreshTriggerNode();
+          else
+            await RefreshOverlayNode();
         }
-        else if (treeView == overlayTreeView)
+        finally
         {
-          await TriggerUtil.ImportOverlays(node.SerializedData);
-          await RefreshOverlayNode();
+          progressWindow.Close();
         }
       }
     }
@@ -354,10 +365,17 @@ namespace EQLogParser
 
     private static IEnumerable<TriggerTreeViewNode> FindNodesByName(SfTreeView treeView, TriggerTreeViewNode node, string name)
     {
+      var trigger = node.SerializedData?.TriggerData;
       if (node.SerializedData?.Name?.Contains(name, StringComparison.OrdinalIgnoreCase) == true ||
-          node.SerializedData?.TriggerData?.Pattern?.Contains(name, StringComparison.OrdinalIgnoreCase) == true)
+          trigger?.Pattern?.Contains(name, StringComparison.OrdinalIgnoreCase) == true ||
+          trigger?.PreviousPattern?.Contains(name, StringComparison.OrdinalIgnoreCase) == true ||
+          trigger?.EndEarlyPattern?.Contains(name, StringComparison.OrdinalIgnoreCase) == true ||
+          trigger?.EndEarlyPattern2?.Contains(name, StringComparison.OrdinalIgnoreCase) == true ||
+          trigger?.EndEarlyPattern3?.Contains(name, StringComparison.OrdinalIgnoreCase) == true ||
+          trigger?.AltTimerName?.Contains(name, StringComparison.OrdinalIgnoreCase) == true ||
+          trigger?.Comments?.Contains(name, StringComparison.OrdinalIgnoreCase) == true)
       {
-        // Yield the current node if its name contains the search term
+        // Yield the current node if any searchable field contains the search term
         yield return node;
       }
 
@@ -622,22 +640,21 @@ namespace EQLogParser
         // delay because node still shows old value
         Dispatcher.InvokeAsync(async () =>
         {
-          var content = node.Content as string;
-          if (string.IsNullOrEmpty(content) || content.Trim().Length == 0 || node.SerializedData.Name == content)
+          if (node.Content is string content && !string.IsNullOrEmpty(content) && content.Trim().Length > 0 && node.SerializedData.Name != content)
           {
-            node.Content = node.SerializedData.Name;
-            treeView.SelectedItems?.Clear();
-            treeView.SelectedItem = node;
-          }
-          else
-          {
-            node.SerializedData.Name = node.Content as string;
+            node.SerializedData.Name = content;
             await TriggerStateDB.Instance.Update(node.SerializedData);
 
             if (node.IsOverlay())
             {
               Application.Current.Resources["OverlayText-" + node.SerializedData.Id] = node.SerializedData.Name;
             }
+          }
+          else
+          {
+            node.Content = node.SerializedData.Name;
+            treeView.SelectedItems?.Clear();
+            treeView.SelectedItem = node;
           }
         }, DispatcherPriority.DataBind);
       }

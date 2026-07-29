@@ -1,14 +1,10 @@
-using log4net;
 using System;
 using System.Globalization;
-using System.Reflection;
 
 namespace EQLogParser
 {
   internal class DateUtil
   {
-    private static readonly ILog Log = LogManager.GetLogger(MethodBase.GetCurrentMethod()?.DeclaringType);
-
     // counting this thing is really slow
     private string _lastDateTimeString;
     private double _lastDateTime;
@@ -28,7 +24,9 @@ namespace EQLogParser
     {
       SecondsMs,     // ss.mmm (seconds and milliseconds)
       HMSCompact,    // mm:ss or hh:mm:ss (omits hours if zero)
-      HMSMsCompact  // mm:ss.mmm or hh:mm:ss.mmm (omits hours if zero)
+      HMSMsCompact,  // mm:ss.mmm or hh:mm:ss.mmm (omits hours if zero)
+      DHMSCompact,   // mm:ss or hh:mm:ss or dd:hh:mm:ss (omits leading zero units)
+      DHMSMsCompact  // mm:ss.mmm or hh:mm:ss.mmm or dd:hh:mm:ss.mmm (omits leading zero units)
     }
 
     internal static string FormatTicks(long ticks, TimeFormat format)
@@ -65,6 +63,37 @@ namespace EQLogParser
             return $"{hoursComplete:D2}:{minutesComplete:D2}:{secondsComplete:D2}.{millisecondsComplete:D3}";
           else
             return $"{minutesComplete:D2}:{secondsComplete:D2}.{millisecondsComplete:D3}";
+
+        case TimeFormat.DHMSCompact:
+          {
+            var totalSecs = (long)Math.Round((double)ticks / TimeSpan.TicksPerSecond);
+            var daysSecs = totalSecs / 86400;
+            var hoursSecs = totalSecs % 86400 / 3600;
+            var minutesSecs = totalSecs % 3600 / 60;
+            var secondsSecs = totalSecs % 60;
+
+            if (daysSecs > 0)
+              return $"{daysSecs:D2}:{hoursSecs:D2}:{minutesSecs:D2}:{secondsSecs:D2}";
+            if (hoursSecs > 0)
+              return $"{hoursSecs:D2}:{minutesSecs:D2}:{secondsSecs:D2}";
+            return $"{minutesSecs:D2}:{secondsSecs:D2}";
+          }
+
+        case TimeFormat.DHMSMsCompact:
+          {
+            var totalMs = (long)Math.Round((double)ticks / TimeSpan.TicksPerMillisecond);
+            var daysMs = totalMs / (86400 * 1000);
+            var hoursMs = totalMs % (86400 * 1000) / (3600 * 1000);
+            var minutesMs = totalMs % (3600 * 1000) / (60 * 1000);
+            var secondsMs = totalMs % (60 * 1000) / 1000;
+            var millisMs = totalMs % 1000;
+
+            if (daysMs > 0)
+              return $"{daysMs:D2}:{hoursMs:D2}:{minutesMs:D2}:{secondsMs:D2}.{millisMs:D3}";
+            if (hoursMs > 0)
+              return $"{hoursMs:D2}:{minutesMs:D2}:{secondsMs:D2}.{millisMs:D3}";
+            return $"{minutesMs:D2}:{secondsMs:D2}.{millisMs:D3}";
+          }
       }
 
       return string.Empty; // Unreachable due to exhaustive enum cases
@@ -118,14 +147,71 @@ namespace EQLogParser
         return 0;
       }
 
-      uint h = 0, m = 0, s = 0;
-
       var split = source.Split(':');
 
-      if (split.Length is 0 or > 3)
+      if (split.Length is 0 or > 4)
       {
         return 0;
       }
+
+      // Check if any segment has a label (d, h, m, s)
+      var hasLabel = false;
+      foreach (var segment in split)
+      {
+        if (segment.Length > 0 && char.IsLetter(segment[^1]))
+        {
+          hasLabel = true;
+          break;
+        }
+      }
+
+      uint d = 0, h = 0, m = 0, s = 0;
+
+      if (hasLabel)
+      {
+        // Labeled format: 5d:10h:20m:40s, 4h:20m:53s, 20m:53s, 40s, etc.
+
+        foreach (var segment in split)
+        {
+          if (segment.Length == 0)
+          {
+            return 0;
+          }
+
+          var label = char.ToLower(segment[^1]);
+          var valueStr = segment.Length > 1 ? segment[..^1] : "0";
+          var value = TextUtils.ParseUInt(valueStr, uint.MaxValue);
+
+          if (value == uint.MaxValue)
+          {
+            return 0;
+          }
+
+          switch (label)
+          {
+            case 'd':
+              d = value;
+              break;
+            case 'h':
+              h = value;
+              break;
+            case 'm':
+              m = value;
+              if (m > 59) return 0;
+              break;
+            case 's':
+              s = value;
+              if (s > 59) return 0;
+              break;
+            default:
+              return 0;
+          }
+        }
+
+        return s + (m * 60) + (h * 3600) + (d * 86400);
+      }
+
+      // Unlabeled positional format: ss, mm:ss, hh:mm:ss, dd:hh:mm:ss
 
       if (split.Length == 1)
       {
@@ -152,9 +238,20 @@ namespace EQLogParser
           return 0;
         }
       }
+      else if (split.Length == 4)
+      {
+        d = TextUtils.ParseUInt(split[0], 0);
+        h = TextUtils.ParseUInt(split[1], 0);
+        m = TextUtils.ParseUInt(split[2], 0);
+        s = TextUtils.ParseUInt(split[3], 0);
 
-      // Convert to total seconds
-      return s + (m * 60) + (h * 60 * 60);
+        if (s > 59 || m > 59 || h > 23)
+        {
+          return 0;
+        }
+      }
+
+      return s + (m * 60) + (h * 3600) + (d * 86400);
     }
 
     // This doesn't currently get called so test if ever needed
@@ -313,7 +410,7 @@ namespace EQLogParser
 
       if (double.IsNaN(result))
       {
-        Log.Debug("Invalid Date: " + timeString);
+        ExceptionUtil.GlobalLogDebug?.Invoke("Invalid Date: " + timeString);
       }
 
       return result;

@@ -1,20 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0-windows10.0.17763.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <Platforms>AnyCPU;x64</Platforms>
-    <ProjectGuid>{66098053-1304-4A12-8F16-3AC568A4EC11}</ProjectGuid>
-  </PropertyGroup>
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-  </PropertyGroup>
-  <PropertyGroup>
-    <StartupObject />
-    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>EQLogParserTest</RootNamespace>
+    <AssemblyName>EQLogParser.Test</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.4.0" />
@@ -27,6 +19,6 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\EQLogParser\EQLogParser.csproj" />
+    <ProjectReference Include="..\EQLogParser.Utils\EQLogParser.Utils.csproj" />
   </ItemGroup>
 </Project>

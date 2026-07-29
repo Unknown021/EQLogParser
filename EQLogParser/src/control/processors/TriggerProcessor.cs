@@ -44,6 +44,12 @@ namespace EQLogParser
     private readonly Dictionary<string, TriggerWrapper> _activeTriggersById = [];
     private readonly SemaphoreSlim _activeTriggerSemaphore = new(1, 1);
     private readonly object _repeatedLock = new();
+    // Source of truth for variable values — ConcurrentDictionary allows lock-free reads during text processing.
+    private readonly ConcurrentDictionary<string, string> _variables = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, double> _counterValues = new(StringComparer.OrdinalIgnoreCase);
+    // TTL tracking: stores the tick time when each variable was set
+    private readonly Dictionary<string, long> _variableExpiryTimes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _variableLock = new();
     private readonly List<TriggerLogItem> _triggerLogBuffer = [];
     private IReadOnlyDictionary<string, string> _lexicon;
     private List<TrustedPlayer> _trustedPlayers;
@@ -95,7 +101,7 @@ namespace EQLogParser
     {
       // Register this processor's log collection before processing any triggers
       TriggerLogManager.Instance.EnsureCollection(CurrentProcessorName);
-      
+
       await GetActiveTriggersAsync();
       _lexicon = TriggerUtil.ToLexiconDictionary(await TriggerStateDB.Instance.GetLexicon());
       _trustedPlayers = [.. await TriggerStateDB.Instance.GetTrustedPlayers()];
@@ -135,6 +141,20 @@ namespace EQLogParser
       finally
       {
         _activeTriggerSemaphore.Release();
+      }
+    }
+
+    /* Clears all variables, counters, and expiry times for this processor.
+     * Called by {EQLP:CLEAR} to reset variable state without stopping triggers. */
+    internal void ClearVariables()
+    {
+      if (_isDisposed) return;
+
+      lock (_variableLock)
+      {
+        _variables.Clear();
+        _counterValues.Clear();
+        _variableExpiryTimes.Clear();
       }
     }
 
@@ -290,12 +310,37 @@ namespace EQLogParser
       try
       {
         var beginTicks = DateTime.UtcNow.Ticks;
+        // Expire TTL'd variables only when a trigger actually matches (not on every line).
+        // CheckLine/PreviousLine don't use global variables, so no risk of reading stale data.
+        var expiredVariables = false;
+
         foreach (var wrapper in _activeTriggersById.Values)
         {
           if (CheckWindow(wrapper, lineData, _activeWindows, dateTime, out var windowMatches, out var windowSwTime) &&
               CheckLine(wrapper, lineData, out var matches, out var dynamicDuration, out var swTime) &&
               CheckPreviousLine(wrapper, _previous, out var previousMatches, out var previousSwTime))
           {
+            // Expire once before condition evaluation and trigger actions
+            if (!expiredVariables)
+            {
+              ExpireVariablesIfNeeded(beginTicks);
+              expiredVariables = true;
+            }
+
+            // Evaluate variable condition (after pattern match, before actions).
+            // A null AST means no condition was set (always passes). If the condition string
+            // was non-empty but failed to parse, block the trigger (treat as false).
+            if (wrapper.ConditionAst != null)
+            {
+              if (!ConditionEvaluator.Evaluate(wrapper.ConditionAst,
+                  name => ResolveVariable(name, _variables, matches, previousMatches)))
+                continue; // Condition failed, skip this trigger
+            }
+            else if (!string.IsNullOrWhiteSpace(wrapper.TriggerData.MatchVariableCondition))
+            {
+              continue; // Invalid condition syntax — block the trigger
+            }
+
             swTime += previousSwTime;
             swTime += windowSwTime;
             await HandleTriggerAsync(wrapper, lineData, matches, previousMatches, windowMatches, dynamicDuration, swTime, beginTicks);
@@ -645,7 +690,7 @@ namespace EQLogParser
           if (!string.IsNullOrEmpty(displayTemplate) && !displayTemplate.Equals(NullCode, StringComparison.OrdinalIgnoreCase))
           {
             // It’s safe/cheap to compute the final string here; we only defer the external AddText call
-            var updatedDisplayText = ProcessDisplayText(displayTemplate, lineData.Action, earlyMatches, timerData.OriginalMatches, timerData.PreviousMatches, timerData.WindowMatches);
+            var updatedDisplayText = ProcessDisplayText(displayTemplate, lineData.Action, earlyMatches, timerData.OriginalMatches, timerData.PreviousMatches, timerData.WindowMatches, _variables);
             if (!string.IsNullOrEmpty(updatedDisplayText))
             {
               if (overlayTriggers == null)
@@ -732,6 +777,12 @@ namespace EQLogParser
           }
         }
       }
+
+      // Clear variables listed in EndTimerClearVariables (after display/speak/log so they can reference the values)
+      if (timersToStopUi != null)
+      {
+        ClearTimerEndVariablesIfNeeded(wrapper.TriggerData);
+      }
     }
 
     private async Task HandleTriggerAsync(TriggerWrapper wrapper, LineData lineData, Dictionary<string, string> matches,
@@ -759,6 +810,15 @@ namespace EQLogParser
         counterCount = UpdateRepeatedTimes(_counterTimes, wrapper, "trigger-count", beginTicks);
       }
 
+      // Process variable actions (set/clear variables)
+      ProcessVariableActions(wrapper.TriggerData.VariableActions, matches, previousMatches, lineData.Action);
+
+      // Resolve capture groups and line code first, then custom variables last.
+      // Storing the pre-variable template in TimerData.DisplayNameTemplate allows
+      // dynamic updates when variables change from other triggers (e.g. a counter
+      // that decrements while a long-running timer is active). Built-in codes
+      // ({counter}, {repeated}, {logtime}) are resolved in GetDisplayName before
+      // custom variables, giving them precedence.
       if (ProcessMatchesText(wrapper.ModifiedTimerName, matches) is { } altTimerName)
       {
         altTimerName = ProcessMatchesText(altTimerName, previousMatches);
@@ -772,7 +832,14 @@ namespace EQLogParser
         if (wrapper.TriggerData.TimerType > 0 && (wrapper.TriggerData.DurationSeconds > 0 ||
            (wrapper.TriggerData.TimerType is 1 or 3 && !double.IsNaN(dynamicDuration) && dynamicDuration > 0)))
         {
-          await StartTimerAsync(wrapper, altTimerName, beginTicks, dynamicDuration, lineData, matches, previousMatches, windowMatches, loopCount);
+          // Store the template (before variable resolution) for dynamic updates
+          var timerTemplate = altTimerName;
+          if (!string.IsNullOrEmpty(timerTemplate))
+          {
+            altTimerName = ProcessMatchesText(altTimerName, _variables);
+          }
+
+          await StartTimerAsync(wrapper, altTimerName, beginTicks, dynamicDuration, lineData, matches, previousMatches, windowMatches, loopCount, timerTemplate);
         }
       }
 
@@ -790,6 +857,7 @@ namespace EQLogParser
             Matches = matches,
             Previous = previousMatches,
             Action = lineData.Action,
+            Variables = isSound ? null : new Dictionary<string, string>(_variables),
             CounterCount = counterCount,
             BeginTicks = beginTicks,
             BeginTime = lineData.BeginTime
@@ -801,7 +869,8 @@ namespace EQLogParser
         }
       }
 
-      if (ProcessDisplayText(wrapper.ModifiedDisplay, lineData.Action, matches, null, previousMatches, windowMatches) is { } updatedDisplayText)
+      var vars = _variables;
+      if (ProcessDisplayText(wrapper.ModifiedDisplay, lineData.Action, matches, null, previousMatches, windowMatches, vars) is { } updatedDisplayText)
       {
         if (wrapper.HasRepeatedText)
         {
@@ -822,12 +891,12 @@ namespace EQLogParser
         await AddTextAsync(wrapper.TriggerData, updatedDisplayText);
       }
 
-      if (ProcessDisplayText(wrapper.ModifiedShare, lineData.Action, matches, null, previousMatches, windowMatches) is { } updatedShareText)
+      if (ProcessDisplayText(wrapper.ModifiedShare, lineData.Action, matches, null, previousMatches, windowMatches, vars) is { } updatedShareText)
       {
         UiUtil.SetClipboardText(updatedShareText);
       }
 
-      if (ProcessDisplayText(wrapper.ModifiedSendToChat, lineData.Action, matches, null, previousMatches, windowMatches) is { } updatedSendToChatText)
+      if (ProcessDisplayText(wrapper.ModifiedSendToChat, lineData.Action, matches, null, previousMatches, windowMatches,vars) is { } updatedSendToChatText)
       {
         var url = wrapper.TriggerData.ChatWebhook;
         if (string.IsNullOrEmpty(url) || !url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
@@ -859,7 +928,7 @@ namespace EQLogParser
     }
 
     private async Task StartTimerAsync(TriggerWrapper wrapper, string displayName, long beginTicks, double dynamicDuration, LineData lineData,
-      Dictionary<string, string> matches, Dictionary<string, string> previousMatches, Dictionary<string, string> windowMatches, int loopCount = 0)
+      Dictionary<string, string> matches, Dictionary<string, string> previousMatches, Dictionary<string, string> windowMatches, int loopCount = 0, string timerNameTemplate = null)
     {
       var trigger = wrapper.TriggerData;
       var timerList = GetTimerList(wrapper);
@@ -937,6 +1006,8 @@ namespace EQLogParser
         TimerIcon = wrapper.TimerIcon,
         TimerType = trigger.TimerType,
         TimesToLoopCount = loopCount,
+        DisplayNameTemplate = timerNameTemplate,
+        Variables = _variables,
         TriggerId = wrapper.Id,
         TriggerAgainOption = trigger.TriggerAgainOption,
       };
@@ -1022,7 +1093,10 @@ namespace EQLogParser
             }
           }
 
-          if (ProcessDisplayText(wrapper.ModifiedWarningDisplay, lineData.Action, matches, null, previousMatches, windowMatches) is { } updatedDisplayText)
+          // Expire TTL'd variables before processing timer warning text
+          ExpireVariablesIfNeeded();
+
+          if (ProcessDisplayText(wrapper.ModifiedWarningDisplay, lineData.Action, matches, null, previousMatches, windowMatches, _variables) is { } updatedDisplayText)
           {
             await AddTextAsync(trigger, updatedDisplayText);
           }
@@ -1156,7 +1230,10 @@ namespace EQLogParser
             }
           }
 
-          if (ProcessDisplayText(wrapper.ModifiedEndDisplay, lineData.Action, matches, data2.OriginalMatches, data2.PreviousMatches, data2.WindowMatches) is { } updatedDisplayText)
+          // Expire TTL'd variables before processing timer end text
+          ExpireVariablesIfNeeded();
+
+          if (ProcessDisplayText(wrapper.ModifiedEndDisplay, lineData.Action, matches, data2.OriginalMatches, data2.PreviousMatches, data2.WindowMatches, _variables) is { } updatedDisplayText)
           {
             await AddTextAsync(trigger, updatedDisplayText);
           }
@@ -1173,6 +1250,9 @@ namespace EQLogParser
             }
           }
 
+          // Clear variables listed in EndTimerClearVariables (after display/speak so they can reference the values)
+          ClearTimerEndVariablesIfNeeded(trigger);
+
           // repeating
           if (wrapper.TriggerData.TimerType == 4 && wrapper.TriggerData.TimesToLoop > data2.TimesToLoopCount)
           {
@@ -1182,9 +1262,10 @@ namespace EQLogParser
             try
             {
               if (!_activeTriggersById.ContainsKey(wrapper.Id)) return;
-              // repeat 
+              // repeat
               await HandleTriggerAsync(wrapper, data2.RepeatingTimerLineData, data2.OriginalMatches, data2.PreviousMatches, data2.WindowMatches, dynamicDuration,
                 0, DateTime.UtcNow.Ticks, data2.TimesToLoopCount + 1);
+              ExpireVariablesIfNeeded();
               await CheckTimersAsync(wrapper, timerList, lineData);
             }
             finally
@@ -1217,7 +1298,7 @@ namespace EQLogParser
         else
         {
           var lexicon = _lexicon;
-          var tts = ProcessTts(speak.TtsOrSound, speak.Action, speak.Matches, speak.Previous, speak.Original, speak.Window);
+          var tts = ProcessTts(speak.TtsOrSound, speak.Action, speak.Matches, speak.Previous, speak.Original, speak.Window, speak.Variables);
 
           if (speak.IsPrimary)
           {
@@ -1262,8 +1343,8 @@ namespace EQLogParser
       var chatType = ChatLineParser.ParseChatType(lineData.Action);
       if (chatType != null)
       {
-        // Look for Stop
-        TriggerUtil.CheckForStop(chatType, lineData.Action);
+        // Look for Stop and Clear commands (async void, fire-and-forget in Task.Run context)
+        TriggerUtil.CheckCommands(chatType, lineData.Action);
 
         // Look for Quick Share entries
         TriggerUtil.CheckQuickShare(chatType, lineData.Action, lineData.BeginTime, true, CurrentCharacterId, CurrentProcessorName, _trustedPlayers);
@@ -1317,21 +1398,31 @@ namespace EQLogParser
               ModifiedEndEarlyPattern = PreProcessCodes(trigger.EndEarlyPattern, trigger),
               ModifiedEndEarlyPattern2 = PreProcessCodes(trigger.EndEarlyPattern2, trigger),
               ModifiedPattern = !trigger.UseRegex ? pattern : null,
-              HasCounterSpeak = modifiedSpeak?.Contains(CounterCode, StringComparison.OrdinalIgnoreCase) == true,
-              HasCounterText = modifiedDisplay?.Contains(CounterCode, StringComparison.OrdinalIgnoreCase) == true,
-              HasCounterTimer = modifiedTimerName?.Contains(CounterCode, StringComparison.OrdinalIgnoreCase) == true,
-              HasRepeatedSpeak = modifiedSpeak?.Contains(RepeatedCode, StringComparison.OrdinalIgnoreCase) == true,
-              HasRepeatedText = modifiedDisplay?.Contains(RepeatedCode, StringComparison.OrdinalIgnoreCase) == true,
-              HasRepeatedTimer = modifiedTimerName?.Contains(RepeatedCode, StringComparison.OrdinalIgnoreCase) == true,
-              HasLogTimeSpeak = modifiedSpeak?.Contains(LogTimeCode, StringComparison.OrdinalIgnoreCase) == true,
-              HasLogTimeText = modifiedDisplay?.Contains(LogTimeCode, StringComparison.OrdinalIgnoreCase) == true,
-              HasLogTimeTimer = modifiedTimerName?.Contains(LogTimeCode, StringComparison.OrdinalIgnoreCase) == true,
-              HasLogTimeSendToChat = modifiedSendToChat?.Contains(LogTimeCode, StringComparison.OrdinalIgnoreCase) == true,
+              HasCounterSpeak = modifiedSpeak?.Contains(CounterCode, StringComparison.OrdinalIgnoreCase) is true,
+              HasCounterText = modifiedDisplay?.Contains(CounterCode, StringComparison.OrdinalIgnoreCase) is true,
+              HasCounterTimer = modifiedTimerName?.Contains(CounterCode, StringComparison.OrdinalIgnoreCase) is true,
+              HasRepeatedSpeak = modifiedSpeak?.Contains(RepeatedCode, StringComparison.OrdinalIgnoreCase) is true,
+              HasRepeatedText = modifiedDisplay?.Contains(RepeatedCode, StringComparison.OrdinalIgnoreCase) is true,
+              HasRepeatedTimer = modifiedTimerName?.Contains(RepeatedCode, StringComparison.OrdinalIgnoreCase) is true,
+              HasLogTimeSpeak = modifiedSpeak?.Contains(LogTimeCode, StringComparison.OrdinalIgnoreCase) is true,
+              HasLogTimeText = modifiedDisplay?.Contains(LogTimeCode, StringComparison.OrdinalIgnoreCase) is true,
+              HasLogTimeTimer = modifiedTimerName?.Contains(LogTimeCode, StringComparison.OrdinalIgnoreCase) is true,
+              HasLogTimeSendToChat = modifiedSendToChat?.Contains(LogTimeCode, StringComparison.OrdinalIgnoreCase) is true,
               TimerIcon = UiElementUtil.CreateBitmap(trigger.IconSource),
               ModifiedEndEarlyPattern3 = PreProcessCodes(trigger.EndEarlyPattern3, trigger)
             };
 
-            // temp
+            // Parse variable condition into AST (null = no condition / always passes).
+            // A non-empty string that fails to parse will block the trigger at evaluation time.
+            var conditionAst = ConditionParser.Parse(trigger.MatchVariableCondition);
+            if (conditionAst == null && !string.IsNullOrWhiteSpace(trigger.MatchVariableCondition))
+            {
+              Log.Warn($"Invalid variable condition for trigger '{enabled.Name}': {trigger.MatchVariableCondition}");
+            }
+            wrapper.ConditionAst = conditionAst;
+
+            // This is to convert from the old trigger format where TimerType=0 meant a basic timer.
+            // Can be removed eventually once all triggers are migrated to explicit TimerType values.
             if (wrapper.TriggerData.EnableTimer && wrapper.TriggerData.TimerType == 0)
             {
               wrapper.TriggerData.TimerType = 1;
@@ -1469,7 +1560,7 @@ namespace EQLogParser
         }
       }
 
-      if (triggerCount > 750 && CurrentProcessorName?.Contains("Trigger Tester") == false)
+      if (triggerCount > 750 && CurrentProcessorName?.Contains("Trigger Tester") is false)
       {
         Log.Warn($"Over {triggerCount} triggers active for one character. To improve performance consider turning off old triggers.");
       }
@@ -1478,28 +1569,209 @@ namespace EQLogParser
       _ready = true;
     }
 
+    private void ProcessVariableActions(List<VariableAction> variableActions, Dictionary<string, string> matches,
+      Dictionary<string, string> previousMatches, string action)
+    {
+      if (variableActions is not { Count: > 0 }) return;
+
+      foreach (var va in variableActions)
+      {
+        if (string.IsNullOrWhiteSpace(va.VariableName)) continue;
+
+        var key = va.VariableName;
+        var hasTtl = va.TimeToLiveSeconds > 0;
+        var expiryTicks = hasTtl ? DateTime.UtcNow.Ticks + (long)(va.TimeToLiveSeconds * TimeSpan.TicksPerSecond) : 0;
+
+        if (va.IsClearAction)
+        {
+          lock (_variableLock)
+          {
+            _variables.TryRemove(key, out _);
+            _counterValues.Remove(key);
+            _variableExpiryTimes.Remove(key);
+          }
+          continue;
+        }
+
+        // For value-type actions, resolve text outside the lock so the hot path
+        // isn't blocked by string processing. ConcurrentDictionary reads are safe.
+        string resolved = null;
+        if (!va.IsCounterType && !string.IsNullOrEmpty(va.Value))
+        {
+          // Value: resolve through the same pipeline as display text (variables last)
+          resolved = ProcessMatchesText(va.Value, matches);
+          resolved = ProcessMatchesText(resolved, previousMatches);
+          resolved = ProcessLineCode(resolved, action);
+          resolved = ProcessMatchesText(resolved, _variables);
+        }
+
+        // Write mutations inside the lock — counter increment must be atomic
+        lock (_variableLock)
+        {
+          if (va.IsCounterType)
+          {
+            // Counter: increment by Step, starting from InitialValue if new.
+            // If a value-type variable with this name already exists and is numeric,
+            // use it as the starting point instead of InitialValue. This is intentional:
+            // it allows a Value action in one trigger to seed a Counter in another,
+            // making variables more forgiving. For example, setting {stacks} = "3" via
+            // a Value action means a subsequent Counter action on {stacks} starts from 3
+            // rather than resetting to its InitialValue.
+            if (!_counterValues.TryGetValue(key, out var current))
+            {
+              var seeded = false;
+              if (_variables.TryGetValue(key, out var existing))
+              {
+                var parsed = TextUtils.ParseDouble(existing.AsSpan());
+                if (!double.IsNaN(parsed))
+                {
+                  current = parsed;
+                  seeded = true;
+                }
+              }
+              if (!seeded)
+              {
+                current = va.InitialValue;
+              }
+            }
+            current += va.Step;
+            _counterValues[key] = current;
+            _variables[key] = current.ToString(CultureInfo.InvariantCulture);
+          }
+          else if (resolved is not null)
+          {
+            _variables[key] = resolved;
+          }
+
+          // Set TTL if specified
+          if (hasTtl)
+          {
+            _variableExpiryTimes[key] = expiryTicks;
+          }
+          else
+          {
+            _variableExpiryTimes.Remove(key);
+          }
+        }
+      }
+
+      // Display name resolution for timers with custom variables is deferred to
+      // the overlay's GetDisplayName, which resolves from timerData.Variables on each
+      // render cycle. No action needed here.
+    }
+
+    /* Checks for expired variables and removes them based on TTL. */
+    private void ExpireVariablesIfNeeded(long now = 0)
+    {
+      lock (_variableLock)
+      {
+        if (_variableExpiryTimes.Count == 0) return;
+        var time = now == 0 ? DateTime.UtcNow.Ticks : now;
+        var keys = _variableExpiryTimes.Keys.ToArray();
+        foreach (var key in keys)
+        {
+          if (time < _variableExpiryTimes[key]) continue;
+
+          _variables.TryRemove(key, out _);
+          _counterValues.Remove(key);
+          _variableExpiryTimes.Remove(key);
+        }
+      }
+    }
+
+    /* Parses the EndTimerClearVariables string and clears the listed variables.
+     * Accepts comma or space separated names with optional braces/dollar signs: "test, var2, {var3}, $var4".
+     * Must only be called while the caller holds _variableLock. */
+    private void ClearTimerEndVariables(string variableList)
+    {
+      if (string.IsNullOrWhiteSpace(variableList)) return;
+
+      // Split on commas, spaces, or semicolons; strip braces and dollar signs
+      var names = variableList.Split(',', ' ', ';');
+      foreach (var raw in names)
+      {
+        var name = raw.Trim().TrimStart('$').TrimStart('{').TrimEnd('}').Trim();
+        if (string.IsNullOrEmpty(name)) continue;
+        _variables.TryRemove(name, out _);
+        _counterValues.Remove(name);
+        _variableExpiryTimes.Remove(name);
+      }
+    }
+
+    private void ClearTimerEndVariablesIfNeeded(Trigger trigger)
+    {
+      lock (_variableLock)
+      {
+        ClearTimerEndVariables(trigger.EndTimerClearVariables);
+      }
+    }
+
     private static string ProcessDisplayText(string text, string action, Dictionary<string, string> matches,
-      Dictionary<string, string> originalMatches, Dictionary<string, string> previousMatches, Dictionary<string, string> windowMatches)
+      Dictionary<string, string> originalMatches, Dictionary<string, string> previousMatches, Dictionary<string, string> windowMatches, 
+      IReadOnlyDictionary<string, string> variables)
     {
       if (!string.IsNullOrEmpty(text) && !text.Equals(NullCode, StringComparison.OrdinalIgnoreCase))
       {
+        // Capture groups and line code first, then global variables last
         text = ProcessMatchesText(text, originalMatches);
         text = ProcessMatchesText(text, matches);
         text = ProcessMatchesText(text, previousMatches);
         text = ProcessMatchesText(text, windowMatches);
         text = ProcessLineCode(text, action);
+        text = ProcessMatchesText(text, variables);
+
         return text;
       }
       return null;
     }
 
-    private static string ProcessMatchesText(string text, Dictionary<string, string> matches)
+    /* Apply a named modifier (e.g. upper, number) to a resolved value string. */
+    private static string ApplyModifier(string value, string modifierName, string modifierArg)
+    {
+      if (string.IsNullOrEmpty(modifierName))
+        return value;
+
+      return modifierName.ToLowerInvariant() switch
+      {
+        "capitalize" => TextUtils.CapitalizeFirst(value, CultureInfo.CurrentCulture),
+        "center" => TextUtils.PadCenter(value, modifierArg),
+        "number" => double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var num)
+          ? num.ToString("N0", CultureInfo.CurrentCulture) : value,
+        "upper" => value.ToUpper(CultureInfo.CurrentCulture),
+        "lower" => value.ToLower(CultureInfo.CurrentCulture),
+        "padleft" => TextUtils.PadLeft(value, modifierArg),
+        "padright" => TextUtils.PadRight(value, modifierArg),
+        _ => value,
+      };
+    }
+
+    /* Resolve a variable name for condition evaluation.
+     * Priority: global variables → current matches → previous matches. */
+    private static string ResolveVariable(string name,
+        ConcurrentDictionary<string, string> variables,
+        Dictionary<string, string> matches,
+        Dictionary<string, string> previousMatches)
+    {
+      if (variables.TryGetValue(name, out var v) && !string.IsNullOrEmpty(v)) return v;
+      if (matches?.TryGetValue(name, out var m) is true && !string.IsNullOrEmpty(m)) return m;
+      if (previousMatches?.TryGetValue(name, out var pm) is true && !string.IsNullOrEmpty(pm)) return pm;
+      return null;
+    }
+
+    internal static string ProcessMatchesText(string text, IReadOnlyDictionary<string, string> matches)
     {
       if (matches == null || string.IsNullOrEmpty(text) || text.IndexOf('{') < 0) return text;
 
       var matchCollection = TokenRegex.Matches(text);
       if (matchCollection.Count == 0) return text;
 
+      return BuildReplacedText(text, matchCollection, name => matches.TryGetValue(name, out var v) ? v : null);
+    }
+
+    /* Core token replacement loop — resolves names via a delegate and applies modifiers. */
+    private static string BuildReplacedText(string text, MatchCollection matchCollection,
+      Func<string, string> resolveValue)
+    {
       var lastIndex = 0;
       var sb = new StringBuilder(text.Length);
 
@@ -1518,48 +1790,14 @@ namespace EQLogParser
           ? m.Groups["arg"].Value
           : null;
 
-        if (!matches.TryGetValue(name, out var value))
+        var value = resolveValue(name);
+        if (value == null)
         {
           sb.Append(m.Value);
           continue;
         }
 
-        if (!string.IsNullOrEmpty(modifierName))
-        {
-          switch (modifierName.ToLowerInvariant())
-          {
-            case "capitalize":
-              value = TextUtils.CapitalizeFirst(value, CultureInfo.CurrentCulture);
-              break;
-
-            case "center":
-              value = TextUtils.PadCenter(value, modifierArg);
-              break;
-
-            case "number":
-              if (double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var num))
-                value = num.ToString("N0", CultureInfo.CurrentCulture);
-              break;
-
-            case "upper":
-              value = value.ToUpper(CultureInfo.CurrentCulture);
-              break;
-
-            case "lower":
-              value = value.ToLower(CultureInfo.CurrentCulture);
-              break;
-
-            case "padleft":
-              value = TextUtils.PadLeft(value, modifierArg);
-              break;
-
-            case "padright":
-              value = TextUtils.PadRight(value, modifierArg);
-              break;
-          }
-        }
-
-        sb.Append(value);
+        sb.Append(ApplyModifier(value, modifierName, modifierArg));
       }
 
       if (lastIndex < text.Length)
@@ -1570,13 +1808,17 @@ namespace EQLogParser
       return sb.ToString();
     }
 
-    private static string ProcessTts(string tts, string action, Dictionary<string, string> matches, Dictionary<string, string> previous, Dictionary<string, string> original, Dictionary<string, string> window)
+    private static string ProcessTts(string tts, string action, Dictionary<string, string> matches, Dictionary<string, string> previous, Dictionary<string, string> original, Dictionary<string, string> window, 
+      Dictionary<string, string> variables)
     {
+      // Capture groups and line code first, then global variables last
       tts = ProcessMatchesText(tts, original);
       tts = ProcessMatchesText(tts, matches);
       tts = ProcessMatchesText(tts, previous);
       tts = ProcessMatchesText(tts, window);
       tts = ProcessLineCode(tts, action);
+      tts = ProcessMatchesText(tts, variables);
+
       return tts;
     }
 
@@ -1747,8 +1989,9 @@ namespace EQLogParser
           {
             if (match.Groups.Count == 2)
             {
-              // This regex pattern matches time in the formats hh:mm:ss, mm:ss, or ss
-              var timePattern = @"(?<" + match.Groups[1].Value + @">(?:\d+[:]?){1,3})";
+              // This regex pattern matches time in the formats dd:hh:mm:ss, hh:mm:ss, mm:ss, ss
+              // Also supports labeled formats like 5d:10h:20m:40s, 4h:20m:53s, 20m:53s, 40s
+              var timePattern = @"(?<" + match.Groups[1].Value + @">(?:\d+[dhms]?:?){1,4})";
               pattern = pattern.Replace(match.Value, timePattern);
             }
           }
