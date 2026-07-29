@@ -254,7 +254,12 @@ jobs:
           $releaseDir = Join-Path $env:GITHUB_WORKSPACE "EQLogParser\bin\Release\net8.0-windows10.0.17763.0"
           $srcDir = Join-Path $env:GITHUB_WORKSPACE "EQLogParser"
           $backupUtilDir = Join-Path $env:GITHUB_WORKSPACE "BackupUtil\bin\Release\net8.0-windows10.0.17763.0"
-          $signCmd = "`"$signtool`" sign /sha1 $env:SIGN_CERT_THUMBPRINT /fd SHA256 `$f"
+          # $q is Inno Setup's own escape for a literal quote inside a /S value - needed because
+          # wrapping the signtool.exe path (it has spaces) in a real `"` here would collide with
+          # the quotes PowerShell adds around this whole argument when invoking ISCC.exe natively,
+          # causing ISCC to see it split into multiple arguments ("You may not specify more than
+          # one script filename").
+          $signCmd = "`$q$signtool`$q sign /sha1 $env:SIGN_CERT_THUMBPRINT /fd SHA256 `$f"
           & $iscc "/DMyReleaseDir=$releaseDir" "/DMySrcDir=$srcDir" "/DBackupUtilDir=$backupUtilDir" "/Ssigntool=$signCmd" "$env:ISS_PATH"
           if ($LASTEXITCODE -ne 0) { throw "ISCC compile failed with exit code $LASTEXITCODE" }
 
