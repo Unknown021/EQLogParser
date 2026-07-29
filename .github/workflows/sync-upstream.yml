@@ -3,7 +3,12 @@ name: Sync Upstream & Release
 on:
   schedule:
     - cron: '0 13 * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Force a full run for testing, even if no new upstream version exists. Skips committing/tagging/pushing/releasing - uploads the built installer as a workflow artifact instead.'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -51,11 +56,16 @@ jobs:
           echo "Upstream latest tag: $upstream_tag"
           echo "Local latest tag: $local_tag"
           echo "upstream_tag=$upstream_tag" >> "$GITHUB_OUTPUT"
-          if [ "$upstream_tag" != "$local_tag" ]; then
+
+          if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
+            echo "Forced dry run - proceeding regardless of version match."
+            echo "new_version=true" >> "$GITHUB_OUTPUT"
+          elif [ "$upstream_tag" != "$local_tag" ]; then
             echo "new_version=true" >> "$GITHUB_OUTPUT"
           else
             echo "new_version=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "dry_run=${{ github.event.inputs.dry_run == 'true' }}" >> "$GITHUB_OUTPUT"
 
       - name: Merge upstream (auto-resolving known fork customizations)
         id: merge
@@ -70,7 +80,10 @@ jobs:
 
           if [ -z "$conflicted" ]; then
             echo "No conflicts."
-            git commit -m "Merge upstream kauffman12/EQLogParser ${{ steps.versions.outputs.upstream_tag }}"
+            # --allow-empty: a dry run forced against an already-synced upstream has nothing to
+            # merge (git leaves nothing staged), and this commit is thrown away with the runner
+            # anyway in that case since dry runs never push.
+            git commit --allow-empty -m "Merge upstream kauffman12/EQLogParser ${{ steps.versions.outputs.upstream_tag }}"
             echo "resolution=clean" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -245,8 +258,16 @@ jobs:
           & $iscc "/DMyReleaseDir=$releaseDir" "/DMySrcDir=$srcDir" "/DBackupUtilDir=$backupUtilDir" "/Ssigntool=$signCmd" "$env:ISS_PATH"
           if ($LASTEXITCODE -ne 0) { throw "ISCC compile failed with exit code $LASTEXITCODE" }
 
+      - name: Upload dry-run installer artifact
+        if: steps.versions.outputs.new_version == 'true' && steps.merge.outputs.resolution != 'manual' && steps.versions.outputs.dry_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dry-run-installer
+          path: EQLogParserInstall/Output/*.exe
+          retention-days: 7
+
       - name: Package release and publish
-        if: steps.versions.outputs.new_version == 'true' && steps.merge.outputs.resolution != 'manual'
+        if: steps.versions.outputs.new_version == 'true' && steps.merge.outputs.resolution != 'manual' && steps.versions.outputs.dry_run != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
