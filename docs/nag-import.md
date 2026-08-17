@@ -75,7 +75,7 @@ Within a single import, nodes are matched against the tree by **name + `Original
 | 3 | Timer (fills up in NAG) | `EnableTimer`, `TimerType = 3` (EQLP **Progress** — fills; Countdown would drain) |
 | 4 | Countdown (drains in NAG), optionally repeating | non-repeat → `TimerType = 1` (**Countdown**); `repeatTimer` → `TimerType = 4` (**Looping**) + `TimesToLoop = repeatCount` (unlimited → sentinel `999999`, reported as dropped "unlimited timer repeat (approximated)") |
 | 5 | Set Variable | Per-phrase set-variable `VariableAction` (capture group converted to a named group, see §3.6) |
-| 6 | Timer with Remain | Skipped feature — reported as "remain-after-ended timer" (EQLP removes timers on end) |
+| 6 | DotTimer (tick/dot-style timer; v0.2.16-era notes called it "Timer with Remain") | Imported as a plain EQLP countdown (`TimerType = 1`). NAG's tick rendering and its display-text overwrite to `"name --== target ==--"` have no EQLP equivalent → reported as "remain-after-ended timer" |
 | 7 | Clear Variable | Global clears → `EndTimerClearVariables`; phrase-specific clears → per-node Clear `VariableAction` routed via the action's `phrases` array |
 | 8 | Counter | **No visible timer** (NAG counters are invisible in-memory tallies). A counter-incrementing `VariableAction` is kept and the NAG duration becomes `RepeatedResetTime`. `resetCounterPhrases` produce an extra auto-generated "… (Counter Reset)" node that clears the variable |
 | 9 | Clipboard/Chat Command | `TextToShare` / `TextToSendToChat` (`/command` prefix stripped; webhook-only in EQLP) |
@@ -155,7 +155,7 @@ Per-trigger `droppedFeatures` notes (exact strings, appended to Comments as `EQL
 | `extra end-early phrases dropped (max 3)` | EQLP has 3 end-early slots; overflow dropped, first 3 kept in order | 165 triggers |
 | `indefinite timer duration (defaulted to 60s)` | NAG `duration: null` → fixed 60s | (several) |
 | `unlimited timer repeat (approximated)` | Looping timer with sentinel `TimesToLoop = 999999` | (several) |
-| `remain-after-ended timer` | Action type 6 — EQLP removes timers at expiry | 15 triggers |
+| `remain-after-ended timer` | Action type 6 (NAG v0.2.26 "DotTimer") — the tick display has no EQLP equivalent; imported as a plain countdown | 15 triggers |
 | `cast time tracking` | Action type 10 | 6 triggers |
 | `clear variable action alert overlay` | Clear-variable action's NAG alert overlay + duration (e.g. 15s interrupt alert) | 1 trigger ("Capture spell casting") |
 | `set variable (no name)` | Set-variable action without a variable name | rare |
