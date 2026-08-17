@@ -69,7 +69,7 @@ Within a single import, nodes are matched against the tree by **name + `Original
 
 | NAG type | Name | EQLP mapping |
 |---|---|---|
-| 0 | Text Overlay | `TextToDisplay` (+ timer fields if the action has a duration) |
+| 0 | Text Overlay | `TextToDisplay` only. NAG's text display duration (seconds the text stays on screen before auto-hiding; default 6s in the public library) is deliberately **not** mapped to a timer — EQLP would render it as a visible countdown, not a text notification. Imported text persists until cleared by a clear action instead |
 | 1 | Audio Playback | `SoundToPlay` (resolved via `files-database.json`) |
 | 2 | Speech/TTS | `TextToSpeak` |
 | 3 | Timer (fills up in NAG) | `EnableTimer`, `TimerType = 3` (EQLP **Progress** — fills; Countdown would drain) |
