@@ -1,4 +1,4 @@
-﻿using EQLogParser.Audio;
+using EQLogParser.Audio;
 using Syncfusion.Windows.PropertyGrid;
 using System;
 using System.Collections.Generic;
@@ -740,6 +740,11 @@ namespace EQLogParser
         {
           textChange = textOverlay.UseTextDropShadow != original.UseTextDropShadow;
           Application.Current.Resources["OverlayTextEffect-" + textOverlay.Node.Id] = textOverlay.UseTextDropShadow ? ThemeConfig.OverlayTextEffect : null;
+        }
+        else if (args.Property.Name == noTextWrapItem.PropertyName)
+        {
+          textChange = textOverlay.TextOverlayWrap != original.TextOverlayWrap;
+          Application.Current.Resources["TextOverlayTextWrapping-" + textOverlay.Node.Id] = textOverlay.TextOverlayWrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
         }
 
         if (textChange)

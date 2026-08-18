@@ -6,19 +6,14 @@
 #endif
 
 #define MyAppName "EQLogParser"
-#define MyAppVersion "2.3.58"
-#define MyAppPublisher "Unknown021"
-#define MyAppURL "https://github.com/Unknown021/EQLogParser"
+#define MyAppVersion "2.3.59"
+#define MyAppPublisher "Kizant"
+#define MyAppURL "https://github.com/kauffman12/EQLogParser"
 #define MyAppExeName "EQLogParser.exe"
-#ifndef MyReleaseDir
-  #define MyReleaseDir "C:\Dev\EQLogParser\EQLogParser\bin\Release\net8.0-windows10.0.17763.0"
-#endif
-#ifndef MySrcDir
-  #define MySrcDir "C:\Dev\EQLogParser\EQLogParser"
-#endif
-#ifndef BackupUtilDir
-  #define BackupUtilDir "C:\Dev\EQLogParser\BackupUtil\bin\Release\net8.0-windows10.0.17763.0"
-#endif
+#define MyReleaseDir "C:\Users\kauff\code\github\EQLogParser\EQLogParser\bin\Release\net8.0-windows10.0.17763.0"
+;#define MyReleaseDir "C:\Users\kauff\code\github\EQLogParser\EQLogParser\bin\Debug\net8.0-windows10.0.17763.0"
+#define MySrcDir "C:\Users\kauff\code\github\EQLogParser\EQLogParser"
+#define BackupUtilDir "C:\Users\kauff\code\github\EQLogParser\BackupUtil\bin\Release\net8.0-windows10.0.17763.0"
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
@@ -200,7 +195,9 @@ var
   OkButton: TButton;
 begin
   // Create the form
-  Form := CreateCustomForm(ScaleX(358), ScaleY(118), False, False);
+  Form := CreateCustomForm;
+  Form.ClientWidth := ScaleX(358);
+  Form.ClientHeight := ScaleY(118);
   Form.Font.Size := 10
   Form.Caption := 'Additional Components Required';
   Form.Position := poScreenCenter;

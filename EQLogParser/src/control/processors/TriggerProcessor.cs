@@ -1,4 +1,4 @@
-﻿using EQLogParser.Audio;
+using EQLogParser.Audio;
 using log4net;
 using System;
 using System.Collections.Concurrent;
@@ -6,7 +6,6 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
-using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -1292,7 +1291,7 @@ namespace EQLogParser
         var data = speak.Wrapper.TriggerData;
         if (speak.IsSound)
         {
-          var theFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "sounds", speak.TtsOrSound);
+          var theFile = TriggerUtil.ResolveSoundPath(speak.TtsOrSound);
           AudioManager.Instance.SpeakFileAsync(CurrentCharacterId, theFile, data.Priority, _playerVolume, data.Volume);
         }
         else

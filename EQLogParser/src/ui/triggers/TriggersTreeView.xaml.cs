@@ -1,4 +1,4 @@
-﻿using EQLogParser.Audio;
+using EQLogParser.Audio;
 using FontAwesome5;
 using Syncfusion.UI.Xaml.TreeView;
 using System;
@@ -688,6 +688,7 @@ namespace EQLogParser
 
       clearRecentlyMergedMenuItem.IsEnabled = !TriggerStateDB.Instance.RecentlyMerged.IsEmpty || !TriggerStateDB.Instance.MissingMedia.IsEmpty;
       importTriggerMenuItem.Header = node != null && importTriggerMenuItem.IsEnabled ? $"Import to ({node.Content})" : "Import";
+      exportTriggerMenuItem.Header = node != null && count == 1 ? $"Export ({node.Content})" : "Export";
       shareTriggerMenuItem.IsEnabled = count != 1 || node?.SerializedData?.TriggerData?.Private != true;
 
       UiElementUtil.ClearMenuEvents(copySettingsMenuItem.Items, CopySettingsClick);
@@ -801,6 +802,7 @@ namespace EQLogParser
       }
 
       importOverlayMenuItem.Header = node != null && importOverlayMenuItem.IsEnabled ? $"Import to Folder ({node.Content})" : "Import";
+      exportOverlayMenuItem.Header = node != null && count == 1 ? $"Export ({node.Content})" : "Export";
     }
 
     private async void CopySettingsClick(object sender, RoutedEventArgs e)

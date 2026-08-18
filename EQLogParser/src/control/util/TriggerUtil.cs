@@ -1,5 +1,6 @@
-﻿using EQLogParser.Audio;
+using EQLogParser.Audio;
 using log4net;
+using log4net.Appender;
 using Microsoft.Win32;
 using System;
 using System.Collections.Concurrent;
@@ -29,7 +30,18 @@ namespace EQLogParser
     internal static async Task ImportTriggers(TriggerNode parent) => await Import(parent);
     internal static async Task ImportOverlays(TriggerNode triggerNode) => await Import(triggerNode, false);
 
-    // Pick a file via OpenFileDialog; returns the path or null if cancelled
+    // Pick a NAG database directory via folder dialog; returns the path or null if cancelled
+    internal static string SelectNagDatabaseDirectory()
+    {
+      using var dialog = new System.Windows.Forms.FolderBrowserDialog
+      {
+        Description = "Select the directory containing your NAG database files. (*.json)",
+        AutoUpgradeEnabled = true,
+      };
+
+      return dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK ? dialog.SelectedPath : null;
+    }
+
     internal static string SelectImportFile(TriggerNode parent, bool triggers = true)
     {
       var defExt = triggers ? $".{ExtTrigger}.gz" : $".{ExtOverlay}.gz";
@@ -42,6 +54,157 @@ namespace EQLogParser
       };
 
       return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
+
+    // Import overlays from a NAG database directory (reads overlays-database.json and parses via NagUtil).
+    // Returns the number of imported overlays and the number of skipped FCT overlays (unsupported).
+    internal static async Task<(int Imported, int SkippedFct)> ImportNagOverlays(string databaseDirectory)
+    {
+      try
+      {
+        var filePath = Path.Combine(databaseDirectory, "overlays-database.json");
+        if (!File.Exists(filePath))
+        {
+          return (0, 0);
+        }
+
+        var json = await File.ReadAllTextAsync(filePath);
+        var imported = NagUtil.ConvertOverlays(json, out var skippedFct);
+        if (imported?.Count > 0)
+        {
+          await TriggerStateDB.Instance.ImportOverlays(imported);
+        }
+
+        return (imported?.Count ?? 0, skippedFct);
+      }
+      catch (Exception ex)
+      {
+        Log.Error("Error importing NAG overlays", ex);
+      }
+
+      return (0, 0);
+    }
+
+    // Prefix for NAG import root folders ("NAG Ingest - <timestamp>"). Each import creates a new
+    // root so re-imports never update earlier imports — the user deletes what they don't need.
+    private const string NagImportRootPrefix = "NAG Ingest - ";
+
+    // Import triggers from a NAG database directory (reads trigger-database.json and parses via NagUtil)
+    internal static async Task ImportNagTriggers(string databaseDirectory)
+    {
+      try
+      {
+        var filePath = Path.Combine(databaseDirectory, "trigger-database.json");
+        if (!File.Exists(filePath))
+        {
+          await UiUtil.InvokeAsync(() =>
+          {
+            new MessageWindow("Trigger-database.json not found in selected directory.", Resource.IMPORT_ERROR).ShowDialog();
+          });
+          return;
+        }
+
+        var json = await File.ReadAllTextAsync(filePath);
+        // Conversion is CPU-bound (JSON + regex work over the whole database) — run it off the UI thread.
+        var (nodes, results, _) = await Task.Run(() => NagUtil.ConvertTriggers(json, databaseDirectory));
+
+        // Import overlays BEFORE triggers so that ValidateOverlays() can find them
+        // when triggers reference overlay IDs. Triggers must be imported after overlays.
+        var (overlayCount, fctSkipped) = await ImportNagOverlays(databaseDirectory);
+
+        // Count earlier NAG imports so the summary can warn this adds another copy.
+        var priorImports = await TriggerStateDB.Instance.CountChildren(TriggerStateDB.Triggers, NagImportRootPrefix);
+
+        if (nodes?.Count > 0)
+        {
+          var folderName = $"{NagImportRootPrefix}{DateTime.Now:yyyy-MM-dd HH:mm}";
+          // Imported triggers intentionally start disabled — NAG per-character enable states are
+          // not imported; the user enables what they want in the Triggers view.
+          await TriggerStateDB.Instance.ImportTriggers(folderName, nodes);
+        }
+
+        // Generate HTML import report — save in the EQLP log directory
+        // (where the error log lives). This keeps the NAG database
+        // directory clean for users who may want to delete it entirely.
+        var htmlReportPath = string.Empty;
+        try
+        {
+          var logDir = GetLogDirectory();
+          if (!string.IsNullOrEmpty(logDir))
+          {
+            htmlReportPath = Path.Combine(logDir, "nag-import.html");
+            NagUtil.WriteImportReportHtml(results ?? [], htmlReportPath, fctSkipped);
+          }
+        }
+        catch (Exception ex)
+        {
+          Log.Warn("Could not write import report", ex);
+          htmlReportPath = null;
+        }
+
+        // Show summary dialog
+        await UiUtil.InvokeAsync(() =>
+        {
+          if (results is null || results.Count == 0)
+          {
+            new MessageWindow($"No triggers were processed.\nOverlays imported: {overlayCount}", "NAG Ingest Complete").ShowDialog();
+            return;
+          }
+
+          var imported = results.Count(r => r.Status == "Imported");
+          var partial = results.Count(r => r.Status == "Partial");
+          var skipped = results.Count(r => r.Status == "Skipped");
+
+          var overlayLine = $"Overlays imported: {overlayCount}" + (fctSkipped > 0 ? $" ({fctSkipped} FCT skipped — unsupported)" : "");
+          var message = $"NAG Ingest Complete\n\n" +
+            $"{overlayLine}\n" +
+            $"Triggers processed: {results.Count}\n" +
+            $"Imported: {imported}\n" +
+            $"Partial (some features dropped): {partial}\n" +
+            $"Skipped: {skipped}\n\n";
+
+          if (skipped > 0)
+          {
+            var skipReasons = results.Where(r => r.Status == "Skipped")
+              .GroupBy(r => r.Reason)
+              .Select(g => $"{g.Key}: {g.Count()}")
+              .ToList();
+            message += "Skipped triggers:\n" + string.Join("\n", skipReasons.Take(10)) + "\n";
+          }
+
+          if (priorImports > 0)
+          {
+            message += $"\nNote: {priorImports} earlier NAG import(s) already exist — this import adds a separate copy. Delete any you no longer need.\n";
+          }
+
+          // Missing audio files are listed in the HTML report, not here,
+          // to keep the dialog concise.
+
+          if (!string.IsNullOrEmpty(htmlReportPath))
+          {
+            message += $"\nReport: {htmlReportPath}";
+
+            var msg = new MessageWindow(message, "NAG Ingest Complete", MessageWindow.IconType.Info, "Open Report");
+            msg.ShowDialog();
+            if (msg.IsYes1Clicked)
+            {
+              MainActions.OpenFileWithDefault("\"" + htmlReportPath + "\"");
+            }
+          }
+          else
+          {
+            new MessageWindow(message, "NAG Ingest Complete").ShowDialog();
+          }
+        });
+      }
+      catch (Exception ex)
+      {
+        Log.Error("Error importing NAG triggers", ex);
+        await UiUtil.InvokeAsync(() =>
+        {
+          new MessageWindow("Problem importing NAG triggers. Check Error Log for details.", Resource.IMPORT_ERROR).ShowDialog();
+        });
+      }
     }
 
     // Process a previously-selected import file (caller shows progress UI around this)
@@ -291,6 +454,7 @@ namespace EQLogParser
         toOverlay.Width = fromOverlay.Width;
         toOverlay.HorizontalAlignment = fromOverlay.HorizontalAlignment;
         toOverlay.VerticalAlignment = fromOverlay.VerticalAlignment;
+        toOverlay.TextOverlayWrap = fromOverlay.TextOverlayWrap;
         toOverlay.ClosePattern = TextUtils.Trim(fromOverlay.ClosePattern);
         toOverlay.UseCloseRegex = fromOverlay.UseCloseRegex;
 
@@ -342,6 +506,7 @@ namespace EQLogParser
           // make sure old default data is no longer set (should be fixed during startup)
           Application.Current.Resources["OverlayVerticalAlignment-" + toTextModel.Node.Id] = (VerticalAlignment)toTextModel.VerticalAlignment;
           Application.Current.Resources["OverlayTextEffect-" + toTextModel.Node.Id] = toTextModel.UseTextDropShadow ? ThemeConfig.OverlayTextEffect : null;
+          Application.Current.Resources["TextOverlayTextWrapping-" + toTextModel.Node.Id] = toTextModel.Node.OverlayData.TextOverlayWrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
 
           AssignBrushResource(toTextModel, fromOverlay, "OverlayColor", "OverlayBrush", "OverlayBrushColor");
           AssignBrushResource(toTextModel, fromOverlay, "FontColor", "FontBrush", "TextOverlayFontColor");
@@ -453,6 +618,28 @@ namespace EQLogParser
       return text;
     }
 
+    // Resolves a sound file reference to a full path. If the filename contains
+    // a path separator, it is treated as an explicit (absolute or relative) path.
+    // Otherwise, it is resolved from the default data/sounds directory.
+    internal static string ResolveSoundPath(string soundFile)
+    {
+      if (string.IsNullOrEmpty(soundFile))
+      {
+        return null;
+      }
+
+      // If it contains a path separator, treat as an explicit path
+      if (soundFile.Contains('\\') || soundFile.Contains('/'))
+      {
+        return Path.IsPathRooted(soundFile)
+          ? soundFile
+          : Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, soundFile));
+      }
+
+      // Otherwise, look in the default sounds directory
+      return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data", "sounds", soundFile);
+    }
+
     internal static bool SoundFileExists(string text)
     {
       if (string.IsNullOrEmpty(text))
@@ -460,7 +647,7 @@ namespace EQLogParser
         return false;
       }
 
-      return File.Exists(@"data/sounds/" + text);
+      return File.Exists(ResolveSoundPath(text));
     }
 
     internal static bool MatchSoundFile(string text, out string file, out string notFile)
@@ -1186,6 +1373,30 @@ namespace EQLogParser
 
     [GeneratedRegex(@"\{(TS|[sn](?:\s*[0-9]+\s*|\s*[><]=?\s*[0-9]+\s*|=\s*[0-9]+\s*)?)\}", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex TestRegex();
+
+    /// <summary>
+    /// Returns the directory of the EQLP log file (where the error log lives),
+    /// or null if it cannot be determined.
+    /// </summary>
+    private static string GetLogDirectory()
+    {
+      try
+      {
+        var fileAppender = Log.Logger.Repository.GetAppenders()
+          .OfType<FileAppender>()
+          .FirstOrDefault(fa => !string.IsNullOrEmpty(fa.File));
+        if (fileAppender is not null)
+        {
+          return Path.GetDirectoryName(fileAppender.File);
+        }
+      }
+      catch (Exception ex)
+      {
+        Log.Warn("Could not determine log directory", ex);
+      }
+
+      return null;
+    }
   }
 
   internal class CharacterData

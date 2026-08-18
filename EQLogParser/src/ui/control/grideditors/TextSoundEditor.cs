@@ -1,6 +1,8 @@
-﻿using EQLogParser.Audio;
+using EQLogParser.Audio;
+using Microsoft.Win32;
 using Syncfusion.Windows.PropertyGrid;
 using Syncfusion.Windows.Tools.Controls;
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -21,9 +23,11 @@ namespace EQLogParser
     private TextBox _theTtsBox;
     private TextBox _theRealTextBox;
     private TextBox _theErrorTextBox;
+    private TextBox _thePathBox;
     private Button _testButton;
     private StackPanel _buttonContainer;
     private Grid _grid;
+    private bool _isSettingOptionsFromText;
 
     public TextSoundEditor(ObservableCollection<string> fileList)
     {
@@ -65,7 +69,7 @@ namespace EQLogParser
 
       _theOptionsCombo = new ComboBoxAdv
       {
-        ItemsSource = new List<string> { "Text to Speak", "Play Sound" },
+        ItemsSource = new List<string> { "Text to Speak", "Play Sound", "Browse for Sound File" },
         SelectedIndex = 0,
         BorderThickness = new Thickness(0),
         IsReadOnly = true
@@ -108,6 +112,18 @@ namespace EQLogParser
         Visibility = Visibility.Collapsed
       };
 
+      _thePathBox = new TextBox
+      {
+        HorizontalAlignment = HorizontalAlignment.Stretch,
+        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        Padding = new Thickness(0, 2, 0, 2),
+        TextWrapping = TextWrapping.Wrap,
+        VerticalContentAlignment = VerticalAlignment.Center,
+        BorderThickness = new Thickness(0, 0, 0, 0),
+        IsReadOnly = true,
+        Visibility = Visibility.Collapsed
+      };
+
       _theRealTextBox = new TextBox
       {
         Name = "Real",
@@ -119,16 +135,19 @@ namespace EQLogParser
       _theSoundCombo.SelectedIndex = -1;
       _theSoundCombo.ItemsSource = _fileList;
       _theRealTextBox.TextChanged += RealTextBoxTextChanged;
+      _theErrorTextBox.TextChanged += ErrorBoxTextChanged;
       _theErrorTextBox.SetResourceReference(TextBox.ForegroundProperty, "EQWarnForegroundBrush");
       _testButton.SetResourceReference(Button.HeightProperty, "EQButtonHeight");
 
       _theTtsBox.SetValue(Grid.ColumnProperty, 0);
       _theErrorTextBox.SetValue(Grid.ColumnProperty, 0);
+      _thePathBox.SetValue(Grid.ColumnProperty, 0);
       _theSoundCombo.SetValue(Grid.ColumnProperty, 0);
       _buttonContainer.SetValue(Grid.ColumnProperty, 1);
       _grid.Children.Add(_theRealTextBox);
       _grid.Children.Add(_theTtsBox);
       _grid.Children.Add(_theErrorTextBox);
+      _grid.Children.Add(_thePathBox);
       _grid.Children.Add(_theSoundCombo);
       _grid.Children.Add(_buttonContainer);
 
@@ -151,7 +170,12 @@ namespace EQLogParser
           }
           else if (_theOptionsCombo.SelectedIndex == 1 && _theSoundCombo.SelectedValue is string selected && !string.IsNullOrEmpty(selected))
           {
-            AudioManager.Instance.TestSpeakFileAsync(@"data/sounds/" + selected, model.Volume);
+            AudioManager.Instance.TestSpeakFileAsync(TriggerUtil.ResolveSoundPath(selected), model.Volume);
+          }
+          else if (_theOptionsCombo.SelectedIndex == 2 && TriggerUtil.MatchSoundFile(_theRealTextBox.Text, out var browsedFile, out _) &&
+            File.Exists(TriggerUtil.ResolveSoundPath(browsedFile)))
+          {
+            AudioManager.Instance.TestSpeakFileAsync(TriggerUtil.ResolveSoundPath(browsedFile), model.Volume);
           }
         }
       }
@@ -162,23 +186,38 @@ namespace EQLogParser
       if (sender is TextBox textBox)
       {
         var isSound = TriggerUtil.MatchSoundFile(textBox.Text, out var soundFile, out _);
-        var soundExists = isSound && File.Exists(@"data/sounds/" + soundFile);
+        var soundExists = isSound && TriggerUtil.SoundFileExists(soundFile);
 
         if (isSound)
         {
-          if (soundExists)
+          var isInFileList = _theSoundCombo.Items.Contains(soundFile);
+          if (soundExists && isInFileList)
           {
             _theOptionsCombo.SelectedIndex = 1;
             _theErrorTextBox.Visibility = Visibility.Collapsed;
+            _thePathBox.Visibility = Visibility.Collapsed;
             _theTtsBox.Visibility = Visibility.Collapsed;
 
-            if (!Equals(_theSoundCombo.SelectedItem, soundFile) && _theSoundCombo.Items.Contains(soundFile))
+            if (!Equals(_theSoundCombo.SelectedItem, soundFile))
             {
               _theSoundCombo.Tag = true;
               _theSoundCombo.SelectedItem = soundFile;
             }
 
             _theSoundCombo.Visibility = Visibility.Visible;
+          }
+          else if (soundExists && !isInFileList)
+          {
+            // Custom browsed sound file — show full path, keep "Browse for Sound File" selected
+            // Guard against TypeComboBoxSelectionChanged opening the file dialog during programmatic update
+            _isSettingOptionsFromText = true;
+            _theOptionsCombo.SelectedIndex = 2;
+            _isSettingOptionsFromText = false;
+            _theErrorTextBox.Visibility = Visibility.Collapsed;
+            _theTtsBox.Visibility = Visibility.Collapsed;
+            _theSoundCombo.Visibility = Visibility.Collapsed;
+            _thePathBox.Text = TriggerUtil.ResolveSoundPath(soundFile);
+            _thePathBox.Visibility = Visibility.Visible;
           }
           else
           {
@@ -204,18 +243,37 @@ namespace EQLogParser
         }
 
         _testButton.IsEnabled = _theOptionsCombo.SelectedIndex == 1 ||
+          _theOptionsCombo.SelectedIndex == 2 ||
           (_theOptionsCombo.SelectedIndex == 0 && !string.IsNullOrEmpty(textBox.Text));
       }
     }
 
     private void TypeComboBoxSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+      if (_isSettingOptionsFromText)
+      {
+        return;
+      }
+
       if (sender is ComboBoxAdv { SelectedIndex: > -1 } combo)
       {
+        // Index 2 = "Browse for Sound File" — open file dialog immediately
+        if (combo.SelectedIndex == 2)
+        {
+          var browseSucceeded = BrowseForSoundFile();
+          if (!browseSucceeded)
+          {
+            // User cancelled or error — reset to previous selection
+            combo.SelectedIndex = _theTtsBox.Visibility == Visibility.Visible ? 0 : 1;
+          }
+          return;
+        }
+
         var hideText = combo.SelectedIndex != 0;
         _theTtsBox.Visibility = hideText ? Visibility.Collapsed : Visibility.Visible;
-        _theSoundCombo.Visibility = hideText ? Visibility.Visible : Visibility.Collapsed;
+        _theSoundCombo.Visibility = hideText && combo.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
         _theErrorTextBox.Visibility = Visibility.Collapsed;
+        _thePathBox.Visibility = Visibility.Collapsed;
 
         if (!hideText)
         {
@@ -223,7 +281,7 @@ namespace EQLogParser
           _theTtsBox.Text = previous + " ";
           _theTtsBox.Text = previous;
         }
-        else
+        else if (combo.SelectedIndex == 1)
         {
           var isSound = TriggerUtil.MatchSoundFile(_theRealTextBox.Text, out var decoded, out var _);
           if (!isSound || !_theSoundCombo.Items.Contains(decoded) || (_theSoundCombo.SelectedValue is string selectedValue &&
@@ -239,6 +297,25 @@ namespace EQLogParser
       }
     }
 
+    private bool BrowseForSoundFile()
+    {
+      var dialog = new OpenFileDialog
+      {
+        Filter = "Audio Files|*.wav;*.mp3",
+        Title = "Select a Sound File"
+      };
+
+      if (dialog.ShowDialog() == true && !string.IsNullOrEmpty(dialog.FileName))
+      {
+        var selectedPath = dialog.FileName;
+        // Store the full path in <<>> encoding — ResolveSoundPath handles absolute paths
+        _theRealTextBox.Text = "<<" + selectedPath + ">>";
+        return true;
+      }
+
+      return false;
+    }
+
     private void SoundComboSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
       if (sender is ComboBox { SelectedValue: string selected } combo)
@@ -246,7 +323,7 @@ namespace EQLogParser
         if (!string.IsNullOrEmpty(selected))
         {
           // change from real text box being modified
-          var path = @"data/sounds/" + selected;
+          var path = TriggerUtil.ResolveSoundPath(selected);
           if (combo.Tag == null && File.Exists(path))
           {
             var codedName = "<<" + selected + ">>";
@@ -258,6 +335,26 @@ namespace EQLogParser
             AudioManager.Instance.TestSpeakFileAsync(path);
           }
           combo.Tag = null;
+        }
+      }
+    }
+
+    private void ErrorBoxTextChanged(object sender, TextChangedEventArgs e)
+    {
+      // When the user edits a missing sound file path in the error box,
+      // propagate the change to the bound _theRealTextBox so the model is
+      // updated (enabling save). Only update when the text looks like a
+      // complete sound file path to avoid intermediate typing states from
+      // triggering RealTextBoxTextChanged's TTS branch.
+      if (sender is TextBox textBox &&
+        _theOptionsCombo.SelectedIndex == -1 &&
+        (textBox.Text.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
+         textBox.Text.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase)))
+      {
+        var codedName = "<<" + textBox.Text + ">>";
+        if (_theRealTextBox.Text != codedName)
+        {
+          _theRealTextBox.Text = codedName;
         }
       }
     }
@@ -307,8 +404,16 @@ namespace EQLogParser
 
       if (_theErrorTextBox != null)
       {
+        _theErrorTextBox.TextChanged -= ErrorBoxTextChanged;
         BindingOperations.ClearAllBindings(_theErrorTextBox);
         _theErrorTextBox = null;
+      }
+
+      if (_thePathBox != null)
+      {
+        _thePathBox.Text = string.Empty;
+        BindingOperations.ClearAllBindings(_thePathBox);
+        _thePathBox = null;
       }
 
       if (_testButton != null)

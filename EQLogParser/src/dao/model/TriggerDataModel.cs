@@ -1,4 +1,4 @@
-﻿using LiteDB;
+using LiteDB;
 using Syncfusion.UI.Xaml.TreeView.Engine;
 using System;
 using System.Collections.Concurrent;
@@ -129,6 +129,7 @@ namespace EQLogParser
     public bool StreamerMode { get; set; }
     public bool HideDuplicates { get; set; }
     public bool UseTextDropShadow { get; set; } = true;
+    public bool TextOverlayWrap { get; set; } = true;
     public int TimerMode { get; set; }
     public long Height { get; set; } = 400;
     public long Width { get; set; } = 300;
@@ -593,6 +594,10 @@ namespace EQLogParser
     public string Id { get; set; }
     public bool IsExpanded { get; set; }
     public string Name { get; set; }
+    // Original source ID (e.g. NAG triggerId). Persisted so re-imports can match nodes by
+    // source identity — NAG allows duplicate names for distinct triggers, so matching by
+    // name alone would collapse them. Null for hand-created and GINA-imported nodes.
+    public string OriginalId { get; set; }
     public Trigger TriggerData { get; set; }
     public Overlay OverlayData { get; set; }
     public int Index { get; set; }
@@ -630,6 +635,8 @@ namespace EQLogParser
   {
     public List<ExportTriggerNode> Nodes { get; set; } = [];
     [JsonIgnore][BsonIgnore] public bool HasMissingMedia { get; set; }
+    // OriginalId is inherited from TriggerNode (persisted) — import flows set it from the
+    // NAG triggerId and Import() uses it to match same-named distinct triggers on re-import.
   }
 
   internal class LegacyTriggerNode

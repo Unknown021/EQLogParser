@@ -1,4 +1,4 @@
-﻿using log4net;
+using log4net;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -453,7 +453,7 @@ namespace EQLogParser
         Padding = new Thickness(6, 0, 6, 0),
         Margin = new Thickness(0),
         Text = text,
-        TextWrapping = TextWrapping.Wrap,
+
         Visibility = Visibility.Collapsed,
         IsHitTestVisible = false
       };
@@ -462,6 +462,7 @@ namespace EQLogParser
       block.SetResourceReference(TextBlock.FontSizeProperty, "TextOverlayFontSize-" + _node.Id);
       block.SetResourceReference(TextBlock.FontFamilyProperty, "TextOverlayFontFamily-" + _node.Id);
       block.SetResourceReference(TextBlock.FontWeightProperty, "TextOverlayFontWeight-" + _node.Id);
+      block.SetResourceReference(TextBlock.TextWrappingProperty, "TextOverlayTextWrapping-" + _node.Id);
       block.SetResourceReference(TextBlock.HorizontalAlignmentProperty, "OverlayHorizontalAlignment-" + _node.Id);
       block.SetResourceReference(TextBlock.EffectProperty, "OverlayTextEffect-" + _node.Id);
       return block;

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -18,7 +19,10 @@ namespace EQLogParser
     public static string BuildBackupFilename()
     {
       // get file name
-      var version = typeof(FileUtil).Assembly.GetName().Version?.ToString();
+      // Use the entry assembly (the main EQLP exe) to get the real app version,
+      // not the EQLogParser.Utils assembly which is always 1.0.0.
+      var assembly = Assembly.GetEntryAssembly() ?? typeof(FileUtil).Assembly;
+      var version = assembly.GetName().Version?.ToString();
       var dateTime = DateTime.Now.ToString("yyyyMMdd-ssfff", CultureInfo.InvariantCulture);
       version = string.IsNullOrEmpty(version) ? "unknown" : version[..^2];
       return $"EQLogParser_backup_{version}_{dateTime}.zip";

@@ -1,4 +1,4 @@
-﻿using LiteDB;
+using LiteDB;
 using log4net;
 using System;
 using System.Collections.Concurrent;
@@ -540,9 +540,13 @@ namespace EQLogParser
         Import(parent, imported, Triggers);
         return Task.CompletedTask;
       });
+
+      TriggerImportEvent?.Invoke(true);
     }
 
     // from GINA or Quick Share with custom Folder name
+    // Returns a mapping of OriginalId (e.g. NAG triggerId) → EQLP node Ids for import-time
+    // lookups. Multi-phrase NAG triggers produce one node per phrase, so each key maps to a list.
     internal async Task ImportTriggers(string name, IEnumerable<ExportTriggerNode> imported, HashSet<string> characterIds = null)
     {
       await _taskQueue.EnqueueTransaction(() =>
@@ -558,6 +562,23 @@ namespace EQLogParser
       });
 
       TriggerImportEvent?.Invoke(true);
+    }
+
+    // Count nodes directly under a top-level root (e.g. Triggers) whose names start with a
+    // prefix — used to warn when re-importing NAG data would add another copy of an earlier import.
+    internal async Task<int> CountChildren(string topName, string namePrefix)
+    {
+      return await _taskQueue.Enqueue(() =>
+      {
+        var count = 0;
+        if (GetCol<TriggerNode>(TreeCol) is { } tree &&
+            tree.FindOne(n => n.Parent == null && n.Name == topName) is { } root)
+        {
+          count = tree.FindAll().Count(n => n.Parent == root.Id && n.Name.StartsWith(namePrefix, StringComparison.Ordinal));
+        }
+
+        return Task.FromResult(count);
+      });
     }
 
     internal async Task<bool> IsAnyEnabled(string triggerId)
@@ -948,12 +969,19 @@ namespace EQLogParser
         characterStates = states.Query().Where(s => characterIds.Contains(s.Id)).ToList();
       }
 
+      var triggers = type == Triggers;
+
       // exports include the tree root so ignore
       foreach (var newNode in imported)
       {
         if (newNode.Nodes?.Count > 0)
         {
           Import(tree, parentId, newNode.Nodes, type, characterStates);
+        }
+        // Overlay leaf nodes (no child Nodes) — process directly via the second overload
+        else if (!triggers && newNode.OverlayData != null)
+        {
+          Import(tree, parentId, new[] { newNode }, type, characterStates);
         }
       }
     }
@@ -969,7 +997,28 @@ namespace EQLogParser
       {
         if (triggers)
         {
-          if (tree.FindOne(n => n.Parent == parentId && n.Name == newNode.Name) is { } foundTrigger)
+          // Match an existing node to update in place on re-import. Nodes carrying an
+          // OriginalId (NAG imports) must match by name AND source id — NAG allows
+          // duplicate names for distinct triggers, and matching by name alone would
+          // silently overwrite the first imported trigger with every same-named one.
+          TriggerNode foundTrigger = null;
+          if (newNode.OriginalId != null)
+          {
+            foreach (var candidate in tree.Find(n => n.Parent == parentId && n.Name == newNode.Name))
+            {
+              if (candidate.OriginalId == newNode.OriginalId)
+              {
+                foundTrigger = candidate;
+                break;
+              }
+            }
+          }
+          else
+          {
+            foundTrigger = tree.FindOne(n => n.Parent == parentId && n.Name == newNode.Name);
+          }
+
+          if (foundTrigger is not null)
           {
             // update trigger data
             if (foundTrigger.TriggerData != null)
