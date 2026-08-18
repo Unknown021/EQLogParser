@@ -21,6 +21,7 @@ env:
   INNO_SETUP_URL: https://github.com/jrsoftware/issrc/releases/download/is-7_0_2/innosetup-7.0.2-x64.exe
   ISS_PATH: EQLogParserInstall/EQLogParserInstall.iss
   UPDATECHECKER_PATH: EQLogParser/src/util/UpdateChecker.cs
+  README_PATH: README.md
 
 jobs:
   sync-and-release:
@@ -41,9 +42,16 @@ jobs:
       - name: Add upstream remote
         shell: bash
         run: |
+          # --no-tags: upstream's version tags must never land in our local refs/tags/* namespace.
+          # Tag names collide by design (e.g. "2.3.59" means the same thing in both repos), so an
+          # unqualified `git fetch --tags` (or even git's default auto tag-following, which pulls
+          # in any tag reachable from newly-fetched history) would create a local tag for upstream's
+          # release before we've actually merged and released it ourselves. That makes the
+          # "Determine versions" step below think our fork is already caught up when it isn't -
+          # upstream_tag is read via `git ls-remote` (unaffected), but local_tag is read via
+          # `git tag -l`, which would wrongly include the just-fetched upstream tag.
           git remote add upstream https://github.com/kauffman12/EQLogParser.git
-          git fetch upstream --tags --force
-          git fetch upstream master
+          git fetch upstream --no-tags master
 
       - name: Determine versions
         id: versions
@@ -92,7 +100,13 @@ jobs:
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
-              "$ISS_PATH"|"$UPDATECHECKER_PATH") ;;
+              "$ISS_PATH"|"$UPDATECHECKER_PATH"|"$README_PATH") ;;
+              # Upstream checks its own compiled installer into git under this same naming
+              # convention, so once this fork tracks the same version number the two binaries
+              # collide at an identical path. Content is irrelevant here - the "Package release
+              # and publish" step later deletes stale exes and adds the freshly-built signed one
+              # before the final commit, so whatever wins this conflict is a throwaway placeholder.
+              Release/EQLogParser-install-*.exe) ;;
               *) unknown_conflicts="$unknown_conflicts$f"$'\n' ;;
             esac
           done <<< "$conflicted"
@@ -150,6 +164,36 @@ jobs:
             git add "$UPDATECHECKER_PATH"
           fi
 
+          if echo "$conflicted" | grep -qxF "$README_PATH"; then
+            # This file only diverges from upstream in three permanent ways: a "this is a fork"
+            # disclaimer banner up top, an "and EQ Legends" mention of a fork-only feature, and the
+            # download link (pointing at this fork's own Release dir instead of upstream's GitHub
+            # release page). Take upstream's version (picks up any wording/requirements changes),
+            # then reapply those three patches.
+            git show upstream/master:"$README_PATH" > "$README_PATH"
+
+            perl -0777 -i -pe '
+              s{\A# EQLogParser\n}{This is NOT the original EQLogParser - This is a version with a few extra bells and whistles, maintained separately from the original EQLogParser\n\nSee the https://github.com/kauffman12/EQLogParser for the original EQLogParser\n\n------------------------\n\n# EQLogParser\n};
+              s{P99/EMU Servers\.$}{P99/EMU Servers and EQ Legends.}m;
+              s{^Link to DOWNLOAD the latest Installer:</br>\nhttps://\S+$}{Link to DOWNLOAD the latest Installer:</br>\nhttps://github.com/Unknown021/EQLogParser/tree/master/Release}m;
+            ' "$README_PATH"
+
+            grep -q 'This is NOT the original EQLogParser' "$README_PATH" || failed="$failed $README_PATH:banner"
+            grep -q 'P99/EMU Servers and EQ Legends.' "$README_PATH" || failed="$failed $README_PATH:eq-legends"
+            grep -q 'https://github.com/Unknown021/EQLogParser/tree/master/Release' "$README_PATH" || failed="$failed $README_PATH:download-link"
+
+            git add "$README_PATH"
+          fi
+
+          while IFS= read -r f; do
+            case "$f" in
+              Release/EQLogParser-install-*.exe)
+                git checkout --ours -- "$f"
+                git add "$f"
+                ;;
+            esac
+          done <<< "$conflicted"
+
           if [ -n "$failed" ]; then
             echo "Validation failed after reapplying patches:$failed - falling back to manual resolution."
             git merge --abort
@@ -165,9 +209,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh issue create \
-            --title "Manual merge needed: upstream ${{ steps.versions.outputs.upstream_tag }}" \
-            --body "Automatic sync found upstream released **${{ steps.versions.outputs.upstream_tag }}**, but merging \`upstream/master\` into \`master\` produced conflicts outside of what the workflow can safely auto-resolve (it only auto-resolves conflicts confined to \`$ISS_PATH\` and/or \`$UPDATECHECKER_PATH\`, matching their known permanent fork customizations).
+          # Use the REST endpoint (gh api) rather than `gh issue create`: the latter goes through
+          # GitHub's GraphQL createIssue mutation, which - independent of the issues:write/contents:write
+          # permissions declared above - doesn't reliably authorize the Actions installation token
+          # (see cli/cli#12798 and related community threads: "Resource not accessible by integration").
+          # The plain REST issue-creation endpoint doesn't have this gap.
+          gh api "repos/${{ github.repository }}/issues" --method POST \
+            -f "title=Manual merge needed: upstream ${{ steps.versions.outputs.upstream_tag }}" \
+            -f "body=Automatic sync found upstream released **${{ steps.versions.outputs.upstream_tag }}**, but merging \`upstream/master\` into \`master\` produced conflicts outside of what the workflow can safely auto-resolve.
 
           Resolve locally with:
           \`\`\`
