@@ -1,120 +1,88 @@
-﻿<UserControl x:Class="EQLogParser.TriggersCharacterView"
+<UserControl x:Class="EQLogParser.TriggersCharacterView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:local="clr-namespace:EQLogParser"
              xmlns:syncfusion="http://schemas.syncfusion.com/wpf"
-             xmlns:gif="http://wpfanimatedgif.codeplex.com"
              mc:Ignorable="d" 
              d:DesignHeight="450" d:DesignWidth="800">
   <Grid>
     <Grid.Resources>
-      <local:BooleanToVisibilityConverter x:Key="VisConverter" />
+      <local:CharacterTemplateSelector x:Key="characterTemplateSelector"/>
     </Grid.Resources>
     <Grid Grid.Column="0">
+      <!-- header row is Auto so the framed bar grows with the buttons when the font size changes -->
       <Grid.RowDefinitions>
-        <RowDefinition Height="40" />
-        <RowDefinition Height="30" />
+        <RowDefinition Height="Auto" />
         <RowDefinition Height="100*" />
       </Grid.RowDefinitions>
-      <Border Grid.Row="0" Padding="8,2,0,0" Background="{DynamicResource ContentBackgroundAlt}">
+      <!-- Same framed header panel as TriggersTreeView: plain WPF Borders (Alt3 frame + Alt2 surface) so the theme has nothing to override. -->
+      <Border Grid.Row="0" Padding="2" Background="{DynamicResource ContentBackgroundAlt3}" BorderThickness="1">
         <DockPanel>
-          <TextBlock Text="Manage Characters" FontSize="{DynamicResource EQTitleSize}" Height="{DynamicResource EQButtonHeight}" />
+          <!-- 44 matches the manage triggers header row so the two title bars line up -->
+          <Border DockPanel.Dock="Top" Height="39" Padding="6,2,0,0" Background="{DynamicResource ContentBackgroundAlt2}">
+            <TextBlock Text="Manage Characters" FontSize="{DynamicResource EQTitleSize}" Height="{DynamicResource EQButtonHeight}" />
+          </Border>
+          <!-- Buttons in the Save/Cancel/Hide-Overlays house style, one font size smaller (EQDescriptionSize) and tighter padding to fit the compact panel.
+               New is a DropDownButtonAdv (Timeline's Manage Layouts pattern) for New Character / New Folder at the top level. -->
+          <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="4,5,0,4">
+            <!-- Always creates at top level (unlike the row context menu, which is relative to the selection). -->
+            <!-- IconHeight=0/IconWidth=5 hide the default icon; EQButtonHeight keeps all three buttons the same height. -->
+            <syncfusion:DropDownButtonAdv x:Name="newButton" Label="New" IconHeight="0" IconWidth="5" FontSize="{DynamicResource EQDescriptionSize}" MinWidth="50" Margin="0,0,4,0" Padding="0" Height="{DynamicResource EQButtonHeight}">
+              <syncfusion:DropDownMenuGroup>
+                <syncfusion:DropDownMenuItem Header="New Character" Click="RootCharacterClick" />
+                <syncfusion:DropDownMenuItem Header="New Folder" Click="RootFolderClick" />
+              </syncfusion:DropDownMenuGroup>
+            </syncfusion:DropDownButtonAdv>
+            <Button x:Name="modifyCharacter" Foreground="{DynamicResource PrimaryDarken}" FontSize="{DynamicResource EQDescriptionSize}" MinWidth="50" Margin="0,0,4,0" Padding="10,0,10,0" IsEnabled="False" Click="ModifyClick" Content="Modify" Height="{DynamicResource EQButtonHeight}" />
+            <Button x:Name="deleteCharacter" Foreground="{DynamicResource PrimaryDarken}" FontSize="{DynamicResource EQDescriptionSize}" MinWidth="50" Padding="10,0,10,0" IsEnabled="False" Click="DeleteClick" Content="Delete" Height="{DynamicResource EQButtonHeight}" />
+          </StackPanel>
         </DockPanel>
       </Border>
-      <syncfusion:ToolBarAdv Grid.Row="1" GripperVisibility="Hidden" Background="{DynamicResource ContentBackground}">
-        <Button x:Name="addCharacter" FontSize="{DynamicResource EQContentSize}" MinWidth="50" Margin="0,0,8,0" Padding="4,4,4,4" Click="AddClick">Add</Button>
-        <Button x:Name="modifyCharacter" FontSize="{DynamicResource EQContentSize}" MinWidth="50" Margin="0,0,8,0" Padding="4,4,4,4" IsEnabled="False" Click="ModifyClick">Modify</Button>
-        <Button x:Name="deleteCharacter" FontSize="{DynamicResource EQContentSize}" MinWidth="50" Padding="4,4,4,4" IsEnabled="False" Click="DeleteClick">Delete</Button>
-      </syncfusion:ToolBarAdv>
-      <syncfusion:SfDataGrid x:Name="dataGrid"
-                               Grid.Row="2"
-                               AllowResizingColumns="False"
-                               AutoGenerateColumns="False"
-                               ColumnSizer="AutoLastColumnFill"
-                               HideEmptyGridViewDefinition="False"
-                               GridLinesVisibility="Both"
-                               CurrentCellBorderThickness="2"
-                               HeaderRowHeight="0"
-                               IsReadOnly="True"
-                               RowHeight="{DynamicResource EQTableRowHeight}"
-                               SelectionChanged="CharacterSelectionChanged"
-                               ShowRowHeader="False"
-                               GridCopyOption="CopyData,IncludeHeaders,IncludeFormat"
-                               SelectionUnit="Row"
-                               SelectionMode="Extended">
-        <syncfusion:SfDataGrid.Columns>
-          <syncfusion:GridTemplateColumn MappingName="Configured Players">
-            <syncfusion:GridTemplateColumn.CellTemplate>
-              <DataTemplate>
-                <Grid>
-                  <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
-                    <CheckBox Margin="8,0,0,0" FocusVisualStyle="{x:Null}" IsChecked="{Binding IsEnabled, Mode=TwoWay}" 
-                        PreviewMouseLeftButtonDown="CharacterCheckboxPreviewMouseLeftButtonDown" />
-                    <TextBlock Margin="5,0,0,0" Padding="4,0,4,0" VerticalAlignment="Center" Text="{Binding Name}">
-                      <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                          <Style.Triggers>
-                            <DataTrigger Binding="{Binding IsEnabled}" Value="True">
-                              <Setter Property="FontStyle" Value="Normal"/>
-                              <Setter Property="FontWeight" Value="DemiBold" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding IsEnabled}" Value="False">
-                              <Setter Property="FontStyle" Value="Italic"/>
-                              <Setter Property="FontWeight" Value="Normal" />
-                            </DataTrigger>
-                          </Style.Triggers>
-                        </Style>
-                      </TextBlock.Style>
-                    </TextBlock>
-                  </StackPanel>
-                  <Image Height="{DynamicResource EQTitleSize}" HorizontalAlignment="Right" Margin="0,0,15,0" Visibility="{Binding IsEnabled, Converter={StaticResource VisConverter}}">
-                    <Image.Style>
-                      <Style TargetType="Image">
-                        <Style.Triggers>
-                          <DataTrigger Binding="{Binding IsWaiting}" Value="True">
-                            <Setter Property="gif:ImageBehavior.AnimatedSource" Value="/icons/waiting.gif"/>
-                          </DataTrigger>
-                          <DataTrigger Binding="{Binding IsWaiting}" Value="False">
-                            <Setter Property="gif:ImageBehavior.AnimatedSource" Value="/icons/active.gif"/>
-                          </DataTrigger>
-                          <DataTrigger Binding="{Binding IsWaiting}" Value="{x:Null}">
-                            <Setter Property="gif:ImageBehavior.AnimatedSource" Value="/icons/idle.gif"/>
-                          </DataTrigger>
-                        </Style.Triggers>
-                      </Style>
-                    </Image.Style>
-                  </Image>
-                  <Label Foreground="Transparent" Background="Transparent" HorizontalAlignment="Right" Width="50" Margin="0,0,24,0">
-                    <Label.Style>
-                      <Style TargetType="Label">
-                        <Style.Triggers>
-                          <DataTrigger Binding="{Binding IsWaiting}" Value="True">
-                            <Setter Property="ToolTip" Value="Attempting to open log file."/>
-                          </DataTrigger>
-                          <DataTrigger Binding="{Binding IsWaiting}" Value="False">
-                            <Setter Property="ToolTip" Value="Log file active."/>
-                          </DataTrigger>
-                          <DataTrigger Binding="{Binding IsWaiting}" Value="{x:Null}">
-                            <Setter Property="ToolTip" Value="File open. Waiting for data."/>
-                          </DataTrigger>
-                          <DataTrigger Binding="{Binding IsEnabled}" Value="False">
-                            <Setter Property="Visibility" Value="Collapsed"/>
-                          </DataTrigger>
-                          <DataTrigger Binding="{Binding IsEnabled}" Value="True">
-                            <Setter Property="Visibility" Value="Visible"/>
-                          </DataTrigger>
-                        </Style.Triggers>
-                      </Style>
-                    </Label.Style>
-                  </Label>
-                </Grid>
-              </DataTemplate>
-            </syncfusion:GridTemplateColumn.CellTemplate>
-          </syncfusion:GridTemplateColumn>
-        </syncfusion:SfDataGrid.Columns>
-      </syncfusion:SfDataGrid>
+      <syncfusion:SfTreeView
+          x:Name="characterTreeView"
+          Grid.Row="1"
+          AllowDragging="True"
+          AllowEditing="True"
+          BorderBrush="{DynamicResource ContentBackground}"
+          BorderThickness="0"
+          CheckBoxMode="Recursive"
+          EditTrigger="F2"
+          FullRowSelect="False"
+          IsAnimationEnabled="False"
+          ItemBeginEdit="ItemBeginEdit"
+          ItemContextMenuOpening="CharacterItemContextMenuOpening"
+          ItemDropped="ItemDropped"
+          ItemDropping="ItemDropping"
+          ItemEndEdit="ItemEndEdit"
+          ItemTemplateDataContextType="Node"
+          ItemTemplateSelector="{StaticResource characterTemplateSelector}"
+          NodeChecked="NodeChecked"
+          NodeCollapsed="NodeExpanded"
+          NodeExpanded="NodeExpanded"
+          Padding="0"
+          PreviewKeyDown="CharacterTreePreviewKeyDown"
+          PreviewMouseRightButtonDown="CharacterTreePreviewMouseRightButtonDown"
+          SelectionChanged="CharacterSelectionChanged"
+          SelectionMode="Extended"
+          ShowRootLines="False">
+        <syncfusion:SfTreeView.EditTemplate>
+          <DataTemplate>
+            <TextBox HorizontalAlignment="Stretch" FontSize="{DynamicResource EQContentSize}" Margin="2,0,8,0"
+                     Text="{Binding Content, Mode=TwoWay}" />
+          </DataTemplate>
+        </syncfusion:SfTreeView.EditTemplate>
+        <syncfusion:SfTreeView.ItemContextMenu>
+          <ContextMenu>
+            <MenuItem x:Name="newCharacterMenuItem" Header="New Character" Click="AddClick" />
+            <MenuItem x:Name="newFolderMenuItem" Header="New Folder" Click="FolderClick" />
+            <MenuItem x:Name="editMenuItem" Header="Modify" Click="ModifyClick" />
+            <Separator />
+            <MenuItem x:Name="deleteMenuItem" Header="Delete" Click="DeleteClick" />
+          </ContextMenu>
+        </syncfusion:SfTreeView.ItemContextMenu>
+      </syncfusion:SfTreeView>
     </Grid>
   </Grid>
 </UserControl>

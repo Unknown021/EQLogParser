@@ -33,7 +33,7 @@ namespace EQLogParser
     private readonly RangeEditor _leftEditor;
     private readonly RangeEditor _heightEditor;
     private readonly RangeEditor _widthEditor;
-    private readonly GridLength _characterViewWidth;
+    private GridLength _characterViewWidth;
     private readonly FileSystemWatcher _soundWatcher;
     private List<string> _deviceIdList;
     private List<string> _deviceNameList;
@@ -197,6 +197,13 @@ namespace EQLogParser
     {
       generalPropertyGrid.PropertyNameColumnDefinition = new GridLength(200 + ((ThemeConfig.CurrentFontSize - 12) * 10));
       secondaryPropertyGrid.PropertyNameColumnDefinition = new GridLength(200 + ((ThemeConfig.CurrentFontSize - 12) * 10));
+
+      // a DynamicResource on ColumnDefinition only resolves at load, so the panel width must be applied here too
+      _characterViewWidth = ThemeConfig.GetTriggerCharacterListWidth();
+      if (mainGrid.ColumnDefinitions[0].Width.Value > 0)
+      {
+        mainGrid.ColumnDefinitions[0].Width = _characterViewWidth;
+      }
     }
 
     private async void TriggersViewOnInitialized(object sender, EventArgs e)
@@ -261,14 +268,7 @@ namespace EQLogParser
       {
         if (characterView?.Visibility == Visibility.Visible)
         {
-          if (characterView.dataGrid.ItemsSource is List<TriggerCharacter> characters)
-          {
-            var index = characters.FindIndex(character => character.Id == entry.CharacterId);
-            if (index > -1)
-            {
-              characterView.dataGrid.SelectedIndex = index;
-            }
-          }
+          characterView.SelectCharacter(entry.CharacterId);
         }
 
         Dispatcher.InvokeAsync(async () => await theTreeView.SelectNode(entry.NodeId));

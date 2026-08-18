@@ -258,7 +258,7 @@ namespace EQLogParser
         var name = list.Count == 1 ? $"{list[0].SerializedData.Name}" : "the selected items";
 
         var msgDialog = new MessageWindow($"Are you sure you want to delete {name}?", Resource.FOLDER_DELETE,
-          MessageWindow.IconType.Question, "Delete");
+          MessageWindow.IconType.Warn, "Delete");
         msgDialog.ShowDialog();
 
         if (msgDialog.IsYes1Clicked)
@@ -630,6 +630,15 @@ namespace EQLogParser
           await RefreshTriggerNode();
           TriggerManager.Instance.TriggersUpdated();
         }
+      }
+    }
+
+    /* Top-level roots (Triggers/Overlays) are located by name throughout the app and must never be renamed. */
+    private void ItemBeginEdit(object sender, TreeViewItemBeginEditEventArgs e)
+    {
+      if (e.Node is TriggerTreeViewNode { ParentNode: null })
+      {
+        e.Cancel = true;
       }
     }
 
