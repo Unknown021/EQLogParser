@@ -340,7 +340,12 @@ jobs:
           # this same gh call due to a transient API error), the tag/commit above are safe to
           # redo (both are no-ops against matching existing state), but re-running `gh release
           # create` against an existing release would hard-fail. Skip it in that case instead.
-          if gh release view "$NEW_VERSION" >/dev/null 2>&1; then
+          # Use the REST endpoint directly (gh api) rather than `gh release view`: the latter
+          # returned a false "found" once immediately after the tag push (observed on the
+          # 2.3.61 run - `gh api .../releases/tags/...` moments later correctly 404'd), a bug
+          # class we've already worked around elsewhere in this file (see the createIssue note
+          # above) by preferring the plain REST call over the friendlier CLI wrapper.
+          if gh api "repos/${{ github.repository }}/releases/tags/$NEW_VERSION" >/dev/null 2>&1; then
             echo "Release $NEW_VERSION already exists - skipping creation."
           else
             gh release create "$NEW_VERSION" "Release/EQLogParser-install-$NEW_VERSION.exe" \
