@@ -31,6 +31,7 @@ namespace EQLogParser
     public string Action { get; init; }
     public Dictionary<string, string> Matches { get; init; }
     public Dictionary<string, string> Previous { get; init; }
+    public Dictionary<string, string> Window { get; init; }
     public Dictionary<string, string> Original { get; init; }
     /* Snapshot of _variables at enqueue time so TTL expiration doesn't affect TTS resolution. */
     public Dictionary<string, string> Variables { get; init; } = new();
@@ -77,6 +78,7 @@ namespace EQLogParser
     public List<NumberOptions> EndEarlyRegex3NOptions { get; set; }
     public Dictionary<string, string> OriginalMatches { get; set; }
     public Dictionary<string, string> PreviousMatches { get; set; }
+    public Dictionary<string, string> WindowMatches { get; set; }
     public long CounterCount { get; set; } = -1;
     public long RepeatedCount { get; set; } = -1;
     public string LogTime { get; set; }
@@ -503,10 +505,13 @@ namespace EQLogParser
     public Trigger TriggerData { get; init; }
     // only the main thread modifies these values
     public string ModifiedPreviousPattern { get; set; }
+    public string ModifiedWindowPattern { get; set; }
     public Regex Regex { get; set; }
     public Regex PreviousRegex { get; set; }
+    public Regex WindowRegex { get; set; }
     public List<NumberOptions> RegexNOptions { get; set; }
     public List<NumberOptions> PreviousRegexNOptions { get; set; }
+    public List<NumberOptions> WindowRegexNOptions { get; set; }
     public bool IsDisabled { get; set; }
     public string ContainsText { get; set; }
     public string PreviousContainsText { get; set; }
@@ -514,5 +519,14 @@ namespace EQLogParser
     public string PreviousStartText { get; set; }
     public long LockedOutTicks { get; set; }
     public ConditionNode ConditionAst { get; set; }
+    public string WindowStartText { get; set; }
+    public string WindowContainsText { get; set; }
+    public int WindowTime { get; set; }
+  }
+
+  internal class TriggerWindow
+  {
+    public double Expiration { get; set; }
+    public Dictionary<string, string> Matches { get; set; }
   }
 }

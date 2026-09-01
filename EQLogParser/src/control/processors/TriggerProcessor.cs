@@ -36,6 +36,7 @@ namespace EQLogParser
     private readonly Dictionary<string, ConcurrentDictionary<string, RepeatedData>> _repeatedSpeakTimes = [];
     private readonly ConcurrentDictionary<string, bool> _requiredOverlays = [];
     private readonly ConcurrentDictionary<string, List<TimerData>> _timerLists = [];
+    private readonly ConcurrentDictionary<string, TriggerWindow> _activeWindows = [];
     private readonly BlockingCollection<TriggerLogItem> _triggerLogCollection = [];
     private readonly BlockingCollection<LineData> _chatCollection = [];
     private readonly BlockingCollection<Speak> _speakCollection = [];
@@ -314,7 +315,8 @@ namespace EQLogParser
 
         foreach (var wrapper in _activeTriggersById.Values)
         {
-          if (CheckLine(wrapper, lineData, out var matches, out var dynamicDuration, out var swTime) &&
+          if (CheckWindow(wrapper, lineData, _activeWindows, dateTime, out var windowMatches, out var windowSwTime) &&
+              CheckLine(wrapper, lineData, out var matches, out var dynamicDuration, out var swTime) &&
               CheckPreviousLine(wrapper, _previous, out var previousMatches, out var previousSwTime))
           {
             // Expire once before condition evaluation and trigger actions
@@ -339,7 +341,8 @@ namespace EQLogParser
             }
 
             swTime += previousSwTime;
-            await HandleTriggerAsync(wrapper, lineData, matches, previousMatches, dynamicDuration, swTime, beginTicks);
+            swTime += windowSwTime;
+            await HandleTriggerAsync(wrapper, lineData, matches, previousMatches, windowMatches, dynamicDuration, swTime, beginTicks);
           }
         }
 
@@ -379,6 +382,109 @@ namespace EQLogParser
           }
         }
       }
+    }
+
+    private static bool CheckWindow(TriggerWrapper wrapper, LineData lineData, ConcurrentDictionary<string, TriggerWindow> activeWindows, double dateTime, out Dictionary<string, string> matches, out long swTime)
+    {
+      var windowActive = false;
+      var found = false;
+      swTime = 0;
+      matches = null;
+
+      if ((wrapper.WindowRegex == null && string.IsNullOrEmpty(wrapper.ModifiedWindowPattern)) || wrapper.WindowTime <= 0)
+      {
+        // Window logic does not apply to this trigger, so the check passes
+        return true;
+      }
+
+      // Check if there is already an active window for this trigger
+      TriggerWindow alreadyActiveWindow = activeWindows.ContainsKey(wrapper.Id) ? activeWindows.First(w => w.Key == wrapper.Id).Value : null;
+      if (alreadyActiveWindow != null)
+      {
+        // check if the active window has expired (with a 1 second buffer to account for possible slight log lag)
+        if (alreadyActiveWindow.Expiration + 1 < dateTime)
+        {
+          // window is no longer active, remove it from the list and null the ExpTime
+          activeWindows.Remove(wrapper.Id, out _);
+          alreadyActiveWindow = null;
+        }
+      }
+
+      long ts0;
+      if (wrapper.WindowRegex != null)
+      {
+        if (string.IsNullOrEmpty(lineData?.Action))
+        {
+          return true;
+        }
+
+        ts0 = Stopwatch.GetTimestamp();
+        var success = false;
+
+        try
+        {
+          if (!string.IsNullOrEmpty(wrapper.WindowStartText))
+          {
+            if (lineData.Action.StartsWith(wrapper.WindowStartText, StringComparison.OrdinalIgnoreCase))
+            {
+              success = TextUtils.SnapshotMatches(wrapper.WindowRegex.Matches(lineData.Action), out matches);
+            }
+          }
+          else if (!string.IsNullOrEmpty(wrapper.WindowContainsText))
+          {
+            if (lineData.Action.Contains(wrapper.WindowContainsText, StringComparison.OrdinalIgnoreCase))
+            {
+              success = TextUtils.SnapshotMatches(wrapper.WindowRegex.Matches(lineData.Action), out matches);
+            }
+          }
+          else
+          {
+            success = TextUtils.SnapshotMatches(wrapper.WindowRegex.Matches(lineData.Action), out matches);
+          }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+          Log.Warn($"Disabling {wrapper.Name} with slow Regex: {wrapper.TriggerData?.WindowPattern}");
+          wrapper.IsDisabled = true;
+          return false;
+        }
+
+        found = success && TriggerUtil.CheckOptions(wrapper.WindowRegexNOptions, matches, out _);
+        if (found) swTime = Stopwatch.GetTimestamp() - ts0;
+      }
+      else if (!string.IsNullOrEmpty(wrapper.ModifiedWindowPattern))
+      {
+        if (string.IsNullOrEmpty(lineData?.Action))
+        {
+          return true;
+        }
+
+        ts0 = Stopwatch.GetTimestamp();
+        found = lineData.Action.Contains(wrapper.ModifiedWindowPattern, StringComparison.OrdinalIgnoreCase);
+        if (found) swTime = Stopwatch.GetTimestamp() - ts0;
+      }
+
+      if (found)
+      {
+        windowActive = true;
+        // add or update the new expiration time for the window
+        var expDateTime = dateTime + wrapper.WindowTime;
+        var activeWindow = new TriggerWindow()
+        {
+          Expiration = expDateTime,
+          Matches = matches
+        };
+        activeWindows.AddOrUpdate(wrapper.Id, activeWindow, (key, value) => value = activeWindow);
+      }
+      else if (alreadyActiveWindow != null)
+      {
+        // this log line isn't the window activation line, but there is an active window for this trigger
+        windowActive = true;
+        // grab the matches from when the window triggered so they're usable when the main trigger fires
+        matches = alreadyActiveWindow.Matches;
+      }
+
+      return windowActive;
     }
 
     private static bool CheckLine(TriggerWrapper wrapper, LineData lineData, out Dictionary<string, string> matches, out double dynamicDuration, out long swTime)
@@ -583,7 +689,7 @@ namespace EQLogParser
           if (!string.IsNullOrEmpty(displayTemplate) && !displayTemplate.Equals(NullCode, StringComparison.OrdinalIgnoreCase))
           {
             // It’s safe/cheap to compute the final string here; we only defer the external AddText call
-            var updatedDisplayText = ProcessDisplayText(displayTemplate, lineData.Action, earlyMatches, timerData.OriginalMatches, timerData.PreviousMatches, _variables);
+            var updatedDisplayText = ProcessDisplayText(displayTemplate, lineData.Action, earlyMatches, timerData.OriginalMatches, timerData.PreviousMatches, timerData.WindowMatches, _variables);
             if (!string.IsNullOrEmpty(updatedDisplayText))
             {
               if (overlayTriggers == null)
@@ -679,7 +785,7 @@ namespace EQLogParser
     }
 
     private async Task HandleTriggerAsync(TriggerWrapper wrapper, LineData lineData, Dictionary<string, string> matches,
-      Dictionary<string, string> previousMatches, double dynamicDuration, long swTime, long beginTicks, int loopCount = 0)
+      Dictionary<string, string> previousMatches, Dictionary<string, string> windowMatches, double dynamicDuration, long swTime, long beginTicks, int loopCount = 0)
     {
       if (!_ready) return;
 
@@ -715,6 +821,7 @@ namespace EQLogParser
       if (ProcessMatchesText(wrapper.ModifiedTimerName, matches) is { } altTimerName)
       {
         altTimerName = ProcessMatchesText(altTimerName, previousMatches);
+        altTimerName = ProcessMatchesText(altTimerName, windowMatches);
         altTimerName = ProcessLineCode(altTimerName, lineData.Action);
         if (wrapper.HasRepeatedTimer)
         {
@@ -731,7 +838,7 @@ namespace EQLogParser
             altTimerName = ProcessMatchesText(altTimerName, _variables);
           }
 
-          await StartTimerAsync(wrapper, altTimerName, beginTicks, dynamicDuration, lineData, matches, previousMatches, loopCount, timerTemplate);
+          await StartTimerAsync(wrapper, altTimerName, beginTicks, dynamicDuration, lineData, matches, previousMatches, windowMatches, loopCount, timerTemplate);
         }
       }
 
@@ -762,7 +869,7 @@ namespace EQLogParser
       }
 
       var vars = _variables;
-      if (ProcessDisplayText(wrapper.ModifiedDisplay, lineData.Action, matches, null, previousMatches, vars) is { } updatedDisplayText)
+      if (ProcessDisplayText(wrapper.ModifiedDisplay, lineData.Action, matches, null, previousMatches, windowMatches, vars) is { } updatedDisplayText)
       {
         if (wrapper.HasRepeatedText)
         {
@@ -783,12 +890,12 @@ namespace EQLogParser
         await AddTextAsync(wrapper.TriggerData, updatedDisplayText);
       }
 
-      if (ProcessDisplayText(wrapper.ModifiedShare, lineData.Action, matches, null, previousMatches, vars) is { } updatedShareText)
+      if (ProcessDisplayText(wrapper.ModifiedShare, lineData.Action, matches, null, previousMatches, windowMatches, vars) is { } updatedShareText)
       {
         UiUtil.SetClipboardText(updatedShareText);
       }
 
-      if (ProcessDisplayText(wrapper.ModifiedSendToChat, lineData.Action, matches, null, previousMatches, vars) is { } updatedSendToChatText)
+      if (ProcessDisplayText(wrapper.ModifiedSendToChat, lineData.Action, matches, null, previousMatches, windowMatches,vars) is { } updatedSendToChatText)
       {
         var url = wrapper.TriggerData.ChatWebhook;
         if (string.IsNullOrEmpty(url) || !url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
@@ -820,7 +927,7 @@ namespace EQLogParser
     }
 
     private async Task StartTimerAsync(TriggerWrapper wrapper, string displayName, long beginTicks, double dynamicDuration, LineData lineData,
-      Dictionary<string, string> matches, Dictionary<string, string> previousMatches, int loopCount = 0, string timerNameTemplate = null)
+      Dictionary<string, string> matches, Dictionary<string, string> previousMatches, Dictionary<string, string> windowMatches, int loopCount = 0, string timerNameTemplate = null)
     {
       var trigger = wrapper.TriggerData;
       var timerList = GetTimerList(wrapper);
@@ -892,6 +999,7 @@ namespace EQLogParser
         Key = wrapper.Id + "-" + displayName,
         OriginalMatches = matches,
         PreviousMatches = previousMatches,
+        WindowMatches = windowMatches,
         ResetColor = _characterResetColor ?? trigger.ResetColor,
         TimerOverlayIds = new ReadOnlyCollection<string>(trigger.SelectedOverlays),
         TimerIcon = wrapper.TimerIcon,
@@ -974,6 +1082,7 @@ namespace EQLogParser
                 IsSound = isSound,
                 Matches = matches,
                 Previous = previousMatches,
+                Window = windowMatches,
                 Action = lineData.Action,
               });
             }
@@ -986,7 +1095,7 @@ namespace EQLogParser
           // Expire TTL'd variables before processing timer warning text
           ExpireVariablesIfNeeded();
 
-          if (ProcessDisplayText(wrapper.ModifiedWarningDisplay, lineData.Action, matches, null, previousMatches, _variables) is { } updatedDisplayText)
+          if (ProcessDisplayText(wrapper.ModifiedWarningDisplay, lineData.Action, matches, null, previousMatches, windowMatches, _variables) is { } updatedDisplayText)
           {
             await AddTextAsync(trigger, updatedDisplayText);
           }
@@ -1009,6 +1118,7 @@ namespace EQLogParser
       {
         var endEarlyPattern = ProcessMatchesText(wrapper.ModifiedEndEarlyPattern, matches);
         endEarlyPattern = ProcessMatchesText(endEarlyPattern, previousMatches);
+        endEarlyPattern = ProcessMatchesText(endEarlyPattern, windowMatches);
         endEarlyPattern = UpdatePattern(trigger.EndUseRegex, endEarlyPattern, out var numberOptions2);
 
         if (trigger.EndUseRegex)
@@ -1027,6 +1137,7 @@ namespace EQLogParser
       {
         var endEarlyPattern2 = ProcessMatchesText(wrapper.ModifiedEndEarlyPattern2, matches);
         endEarlyPattern2 = ProcessMatchesText(endEarlyPattern2, previousMatches);
+        endEarlyPattern2 = ProcessMatchesText(endEarlyPattern2, windowMatches);
         endEarlyPattern2 = UpdatePattern(trigger.EndUseRegex2, endEarlyPattern2, out var numberOptions3);
 
         if (trigger.EndUseRegex2)
@@ -1044,6 +1155,7 @@ namespace EQLogParser
       {
         var endEarlyPattern3 = ProcessMatchesText(wrapper.ModifiedEndEarlyPattern3, matches);
         endEarlyPattern3 = ProcessMatchesText(endEarlyPattern3, previousMatches);
+        endEarlyPattern3 = ProcessMatchesText(endEarlyPattern3, windowMatches);
         endEarlyPattern3 = UpdatePattern(trigger.EndUseRegex3, endEarlyPattern3, out var numberOptions4);
 
         if (trigger.EndUseRegex3)
@@ -1107,6 +1219,7 @@ namespace EQLogParser
                 Matches = matches,
                 Previous = data2.PreviousMatches,
                 Original = data2.OriginalMatches,
+                Window = data2.WindowMatches,
                 Action = lineData.Action
               });
             }
@@ -1119,7 +1232,7 @@ namespace EQLogParser
           // Expire TTL'd variables before processing timer end text
           ExpireVariablesIfNeeded();
 
-          if (ProcessDisplayText(wrapper.ModifiedEndDisplay, lineData.Action, matches, data2.OriginalMatches, data2.PreviousMatches, _variables) is { } updatedDisplayText)
+          if (ProcessDisplayText(wrapper.ModifiedEndDisplay, lineData.Action, matches, data2.OriginalMatches, data2.PreviousMatches, data2.WindowMatches, _variables) is { } updatedDisplayText)
           {
             await AddTextAsync(trigger, updatedDisplayText);
           }
@@ -1149,7 +1262,7 @@ namespace EQLogParser
             {
               if (!_activeTriggersById.ContainsKey(wrapper.Id)) return;
               // repeat
-              await HandleTriggerAsync(wrapper, data2.RepeatingTimerLineData, data2.OriginalMatches, data2.PreviousMatches, dynamicDuration,
+              await HandleTriggerAsync(wrapper, data2.RepeatingTimerLineData, data2.OriginalMatches, data2.PreviousMatches, data2.WindowMatches, dynamicDuration,
                 0, DateTime.UtcNow.Ticks, data2.TimesToLoopCount + 1);
               ExpireVariablesIfNeeded();
               await CheckTimersAsync(wrapper, timerList, lineData);
@@ -1184,7 +1297,7 @@ namespace EQLogParser
         else
         {
           var lexicon = _lexicon;
-          var tts = ProcessTts(speak.TtsOrSound, speak.Action, speak.Matches, speak.Previous, speak.Original, speak.Variables);
+          var tts = ProcessTts(speak.TtsOrSound, speak.Action, speak.Matches, speak.Previous, speak.Original, speak.Window, speak.Variables);
 
           if (speak.IsPrimary)
           {
@@ -1385,6 +1498,49 @@ namespace EQLogParser
               }
             }
 
+            // window
+            if (trigger.WindowPattern is { } windowPattern && !string.IsNullOrEmpty(windowPattern))
+            {
+              windowPattern = UpdatePattern(trigger.WindowUseRegex, windowPattern, out var windowNumberOptions);
+              windowPattern = PreProcessCodes(windowPattern, trigger);
+              windowPattern = UpdateTimePattern(trigger.WindowUseRegex, windowPattern);
+
+              if (trigger.WindowUseRegex)
+              {
+                wrapper.WindowRegex = new Regex(windowPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled, TimeSpan.FromMilliseconds(50));
+                // ReSharper disable once ReturnValueOfPureMethodIsNotUsed
+                wrapper.WindowRegex.Match(""); // warm up the regex
+                wrapper.WindowRegexNOptions = windowNumberOptions;
+                wrapper.WindowTime = trigger.WindowTime;
+
+                // save some start text to search for before trying the regex
+                if (!string.IsNullOrEmpty(windowPattern) && windowPattern.Length > 3)
+                {
+                  if (windowPattern[0] == '^')
+                  {
+                    var startText = TextUtils.GetSearchableTextFromStart(windowPattern, 1);
+                    if (!string.IsNullOrEmpty(startText))
+                    {
+                      wrapper.WindowStartText = startText;
+                    }
+                  }
+                  else
+                  {
+                    var containsText = TextUtils.GetSearchableTextFromStart(windowPattern, 0);
+                    if (!string.IsNullOrEmpty(containsText) && containsText.Length > 2)
+                    {
+                      wrapper.WindowContainsText = containsText;
+                    }
+                  }
+                }
+              }
+              else
+              {
+                wrapper.ModifiedWindowPattern = windowPattern;
+                wrapper.WindowTime = trigger.WindowTime;
+              }
+            }
+
             foreach (var overlayId in trigger.SelectedOverlays)
             {
               if (!string.IsNullOrEmpty(overlayId))
@@ -1550,7 +1706,7 @@ namespace EQLogParser
     }
 
     private static string ProcessDisplayText(string text, string action, Dictionary<string, string> matches,
-      Dictionary<string, string> originalMatches, Dictionary<string, string> previousMatches,
+      Dictionary<string, string> originalMatches, Dictionary<string, string> previousMatches, Dictionary<string, string> windowMatches, 
       IReadOnlyDictionary<string, string> variables)
     {
       if (!string.IsNullOrEmpty(text) && !text.Equals(NullCode, StringComparison.OrdinalIgnoreCase))
@@ -1559,6 +1715,7 @@ namespace EQLogParser
         text = ProcessMatchesText(text, originalMatches);
         text = ProcessMatchesText(text, matches);
         text = ProcessMatchesText(text, previousMatches);
+        text = ProcessMatchesText(text, windowMatches);
         text = ProcessLineCode(text, action);
         text = ProcessMatchesText(text, variables);
 
@@ -1650,13 +1807,14 @@ namespace EQLogParser
       return sb.ToString();
     }
 
-    private static string ProcessTts(string tts, string action, Dictionary<string, string> matches, Dictionary<string, string> previous, Dictionary<string, string> original,
+    private static string ProcessTts(string tts, string action, Dictionary<string, string> matches, Dictionary<string, string> previous, Dictionary<string, string> original, Dictionary<string, string> window, 
       Dictionary<string, string> variables)
     {
       // Capture groups and line code first, then global variables last
       tts = ProcessMatchesText(tts, original);
       tts = ProcessMatchesText(tts, matches);
       tts = ProcessMatchesText(tts, previous);
+      tts = ProcessMatchesText(tts, window);
       tts = ProcessLineCode(tts, action);
       tts = ProcessMatchesText(tts, variables);
 

@@ -4,6 +4,7 @@ tmp/
 .vscode/
 .aider*
 .opencode
+/.vs
 
 # Local-only working documents (never commit)
 local/

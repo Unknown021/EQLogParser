@@ -106,11 +106,14 @@ namespace EQLogParser
     public long WorstEvalTime { get; set; } = -1;
     public string Pattern { get; set; }
     public string PreviousPattern { get; set; }
+    public string WindowPattern { get; set; }
+    public int WindowTime { get; set; }
     public string MatchVariableCondition { get; set; }
     public long Priority { get; set; } = 3;
     public int TriggerAgainOption { get; set; }
     public bool UseRegex { get; set; }
     public bool PreviousUseRegex { get; set; }
+    public bool WindowUseRegex { get; set; }
     public string ActiveColor { get; set; }
     public string IdleColor { get; set; }
     public string ResetColor { get; set; }

@@ -1,8 +1,14 @@
+This is NOT the original EQLogParser - This is a version with a few extra bells and whistles, maintained separately from the original EQLogParser
+
+See the https://github.com/kauffman12/EQLogParser for the original EQLogParser
+
+------------------------
+
 # EQLogParser
-Everquest Log Parser for Live/TLP servers with basic support for P99/EMU Servers.
+Everquest Log Parser for Live/TLP servers with basic support for P99/EMU Servers and EQ Legends.
 
 Link to DOWNLOAD the latest Installer:</br>
-https://github.com/kauffman12/EQLogParser/releases/download/2.3.60/EQLogParser-install-2.3.61.exe
+https://github.com/Unknown021/EQLogParser/tree/master/Release
 
 Minimum Requirements:
 1. Windows 10 x64

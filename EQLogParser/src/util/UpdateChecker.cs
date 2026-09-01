@@ -28,7 +28,7 @@ namespace EQLogParser
 
       try
       {
-        var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/kauffman12/EQLogParser/releases/latest");
+        var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/Unknown021/EQLogParser/releases/latest");
         request.Headers.UserAgent.Add(new ProductInfoHeaderValue("EQLogParser", "1.0"));
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         var response = await MainActions.TheHttpClient.SendAsync(request);
