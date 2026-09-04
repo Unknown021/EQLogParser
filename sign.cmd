@@ -65,10 +65,54 @@ for %%F in (
     "%RELEASE_DIR%\WinRT.Runtime.dll"
     "%RELEASE_DIR%\WpfAnimatedGif.dll"
     "%RELEASE_DIR%\runtimes\win\lib\net8.0\System.Speech.dll"
+    "%RELEASE_DIR%\KokoroSharp.dll"
+    "%RELEASE_DIR%\Microsoft.ML.OnnxRuntime.dll"
     "%BACKUP_DIR%\BackupUtil.exe"
     "%BACKUP_DIR%\BackupUtil.dll"
 ) do (
     call :SignFile "%%~F" || goto :fail
+)
+
+rem ---------------------------------------------------------------------------
+rem TTS runtime packs. These files are no longer in the installer: they are zipped up and published to GitHub, then
+rem downloaded into %LOCALAPPDATA%\EQLogParser\<engine> by whoever enables the engine. Sign them anyway: a downloaded
+rem DLL carrying our certificate is treated far more calmly by antivirus heuristics than an anonymous one, and it gives
+rem users a publisher to look at beyond a hash. Already-signed vendor files (Microsoft's onnxruntime and
+rem System.Numerics.Tensors) are skipped rather than overwritten, so their upstream attribution survives.
+rem
+rem Piper's own binaries are absent from this list on purpose: nothing under {app} is Piper, and EQLogParser no longer
+rem carries piperApi/piper_phonemize/espeak-ng at all (see docs/TtsPacks.md). They live in the TTS data repo's staging
+rem tree, so a Piper binary bump gets signed there before packing -- Build-TtsPack.ps1 -Verify reports any that are not.
+rem
+rem IMPORTANT: sign first, then build the SHA-256 manifest the app verifies against. Signing rewrites the tail of the
+rem file, so hashes taken before this step will not match what users download.
+rem ---------------------------------------------------------------------------
+for %%F in (
+    "%RELEASE_DIR%\MisakiSharp.dll"
+    "%RELEASE_DIR%\NumSharp.dll"
+    "%RELEASE_DIR%\System.Numerics.Tensors.dll"
+    "%RELEASE_DIR%\OpenTK.Audio.OpenAL.dll"
+    "%RELEASE_DIR%\OpenTK.Core.dll"
+    "%RELEASE_DIR%\OpenTK.Mathematics.dll"
+    "%RELEASE_DIR%\runtimes\win-x64\native\onnxruntime.dll"
+    "%RELEASE_DIR%\runtimes\win-x64\native\onnxruntime_providers_shared.dll"
+) do (
+    call :SignPackFile "%%~F" || goto :fail
+)
+
+rem ---------------------------------------------------------------------------
+rem The MSVC runtime installed app-local beside EQLogParser.exe (see EQLogParser\redist\README.md). These ship signed
+rem by Microsoft and go into the installer as they are, so this only catches the case where someone refreshed the
+rem folder from a source that was not signed. Same rule as the pack files: a vendor signature is left alone rather than
+rem replaced with ours.
+rem ---------------------------------------------------------------------------
+for %%F in (
+    "%RELEASE_DIR%\redist\msvcp140.dll"
+    "%RELEASE_DIR%\redist\msvcp140_1.dll"
+    "%RELEASE_DIR%\redist\vcruntime140.dll"
+    "%RELEASE_DIR%\redist\vcruntime140_1.dll"
+) do (
+    call :SignPackFile "%%~F" || goto :fail
 )
 
 for %%F in ("%MSI_DIR%\EQLogParser*.msi") do (
@@ -87,6 +131,25 @@ if not exist "%~1" (
 )
 
 echo Signing %~1
+"%SIGNTOOL%" sign /tr "%TIMESTAMP%" /td sha256 /fd sha256 /a "%~1"
+if errorlevel 1 exit /b 1
+exit /b 0
+
+:SignPackFile
+if not exist "%~1" (
+    echo Warning: pack file not found, skipping: %~1
+    exit /b 0
+)
+
+set "SIGSTATE="
+for /f "usebackq delims=" %%S in (`powershell -NoProfile -Command "(Get-AuthenticodeSignature -LiteralPath '%~1').Status" 2^>nul`) do set "SIGSTATE=%%S"
+if not defined SIGSTATE goto :SignPackFile_Go
+if /i "%SIGSTATE%"=="NotSigned" goto :SignPackFile_Go
+echo Already signed by its vendor ^(=%SIGSTATE%^), leaving it alone: %~nx1
+exit /b 0
+
+:SignPackFile_Go
+echo Signing pack file %~1
 "%SIGNTOOL%" sign /tr "%TIMESTAMP%" /td sha256 /fd sha256 /a "%~1"
 if errorlevel 1 exit /b 1
 exit /b 0

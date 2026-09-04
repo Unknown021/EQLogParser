@@ -1,4 +1,5 @@
 using EQLogParser.Audio;
+using log4net;
 using Syncfusion.Windows.PropertyGrid;
 using System;
 using System.Collections.Generic;
@@ -7,6 +8,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -18,6 +20,8 @@ namespace EQLogParser
 {
   public partial class TriggersView : IDocumentContent
   {
+
+    private static readonly ILog Log = LogManager.GetLogger(MethodBase.GetCurrentMethod()?.DeclaringType);
 
     private readonly Dictionary<string, Window> _previewWindows = [];
     private TriggerConfig _theConfig;
@@ -484,7 +488,10 @@ namespace EQLogParser
             {
               _theConfig.Voice = voiceName;
               await TriggerStateDB.Instance.UpdateConfig(_theConfig);
-              tts = voiceName;
+
+              // What is stored is the identifier and what is spoken is the name: reading 'af_heart' aloud spells the
+              // letters out instead of introducing the voice that was just picked.
+              tts = AudioManager.Instance.GetVoiceSpokenName(voiceName);
             }
           }
           else if (Equals(sender, rateOption))
@@ -1060,6 +1067,50 @@ namespace EQLogParser
     {
       var window = new TriggerDictionaryWindow(theTreeView);
       window.ShowDialog();
+    }
+
+    private void TtsEngineClick(object sender, RoutedEventArgs e)
+    {
+      var window = new TtsEngineWindow();
+      window.ShowDialog();
+
+      // voices belong to the engine, and the engine can change while that dialog is open
+      RefreshVoiceList();
+    }
+
+    // Repopulates the voice combo after an engine switch. Selection changes here are suppressed: OptionsChanged writes
+    // the config and speaks a preview.
+    private void RefreshVoiceList()
+    {
+      var available = AudioManager.Instance.GetVoiceList();
+
+      if (voices.ItemsSource is List<string> current && current.SequenceEqual(available))
+      {
+        return;
+      }
+
+      _ready = false;
+      voices.ItemsSource = available;
+
+      var saved = _theConfig?.Voice;
+      var index = !string.IsNullOrEmpty(saved) ? available.IndexOf(saved) : -1;
+
+      /*
+       * A voice belongs to one engine, so a character configured for Piper has nothing to select the first time Kokoro
+       * speaks. The engine's default is shown and the config is left alone on purpose: the name comes back when the
+       * engine that owns it does, and overwriting it here would cost somebody a preference they never changed. Worth
+       * logging because a dropdown that moved by itself otherwise reads as a bug.
+       */
+      if (index < 0 && !string.IsNullOrEmpty(saved))
+      {
+        Log.Info($"Voice {saved} is not available on " +
+          $"{AudioManager.Instance.GetActiveEngine()}; showing that engine's default.");
+      }
+
+      voices.SelectedIndex = index >= 0
+        ? index
+        : Math.Max(available.IndexOf(AudioManager.Instance.GetDefaultVoice()), 0);
+      _ready = true;
     }
 
     private void QuickShareClick(object sender, RoutedEventArgs e)

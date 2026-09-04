@@ -1,0 +1,73 @@
+<syncfusion:ChromelessWindow x:Class="EQLogParser.TtsEngineWindow"
+  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+  xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:syncfusion="http://schemas.syncfusion.com/wpf"
+  mc:Ignorable="d"
+  ResizeMode="NoResize"
+  ShowInTaskbar="False"
+  WindowStyle="ToolWindow"
+  TitleBarHeight="{DynamicResource EQTableHeaderRowHeight}"
+  TitleFontSize="{DynamicResource EQContentSize}"
+  TitleBarForeground="{DynamicResource PrimaryDarken}"
+  Icon="EQLogParser.ico"
+  TitleTextAlignment="Left"
+  Topmost="False"
+  UseLayoutRounding="True"
+  WindowStartupLocation="CenterOwner"
+  SizeToContent="WidthAndHeight"
+  Title="TTS Engine">
+  <Grid Margin="16,16,16,10" Width="420">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <StackPanel Grid.Row="0" Orientation="Horizontal">
+      <TextBlock Text="TTS Engine:" VerticalAlignment="Center" FontSize="{DynamicResource EQContentSize}"
+        Foreground="{DynamicResource ContentForeground}" />
+      <!--
+        Bare on purpose, like every other combo in the app: SfSkinManager paints it. Rows that cannot be used are
+        disabled from code, on the generated containers, because an ItemContainerStyle here replaces the container style
+        and the themed item does not come back through BasedOn.
+      -->
+      <ComboBox x:Name="engineList" Width="160" Margin="8,0,0,0" SelectionChanged="EngineSelectionChanged" />
+    </StackPanel>
+    <TextBlock Grid.Row="1" x:Name="engineHintText" TextWrapping="Wrap" Margin="0,6,0,0" FontSize="{DynamicResource EQContentSize}"
+      Foreground="{DynamicResource ContentForeground}" />
+
+    <Separator Grid.Row="2" Margin="0,14,0,0" />
+
+    <!-- Replaced with a per engine description whenever the selection changes; see GetEngineDescription. -->
+    <TextBlock Grid.Row="3" x:Name="infoText" TextWrapping="Wrap" Margin="0,14,0,0" FontSize="{DynamicResource EQContentSize}"
+      Foreground="{DynamicResource ContentForeground}" Text="Speech runs locally on this machine." />
+    <!--
+      The bar gets a row of its own and the status line sits under it. Sharing a row with the bar put white text over a
+      fill that grows through it, so the words went unread at exactly the moment anyone wanted to read them. Neither
+      takes colors of its own beyond the theme: this is the app's only progress bar, and letting the skin paint it is
+      what keeps it legible when someone switches to MaterialLight. statusText picks up the feedback colors the rest of
+      the app uses (green for work done, red for work that failed) from code as each message is written.
+    -->
+    <ProgressBar Grid.Row="4" x:Name="progressBar" Height="18" Minimum="0" Maximum="100" Margin="0,14,0,0" Visibility="Collapsed" />
+    <TextBlock Grid.Row="5" x:Name="statusText" TextWrapping="Wrap" Margin="0,8,0,0" FontSize="{DynamicResource EQContentSize}"
+      Foreground="{DynamicResource ContentForeground}" />
+
+    <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+      <Button x:Name="removeButton" Foreground="{DynamicResource PrimaryDarken}" Height="{DynamicResource EQButtonHeight}"
+        FontSize="{DynamicResource EQContentSize}" Click="RemoveClicked" Margin="2,0,4,0" Padding="16,0,16,0" Content="Remove Files" Visibility="Collapsed" />
+      <Button x:Name="actionButton" Foreground="{DynamicResource PrimaryDarken}" Height="{DynamicResource EQButtonHeight}"
+        FontSize="{DynamicResource EQContentSize}" Click="ActionClicked" Margin="2,0,4,0" Padding="20,0,20,0" Content="Download" />
+      <!-- Only shown while something is downloading: closing the window cancels too, but that is not written on it. -->
+      <Button x:Name="cancelButton" Foreground="{DynamicResource PrimaryDarken}" Height="{DynamicResource EQButtonHeight}"
+        FontSize="{DynamicResource EQContentSize}" Click="CancelClicked" Margin="2,0,4,0" Padding="16,0,16,0" Content="Cancel" Visibility="Collapsed" />
+      <Button x:Name="closeButton" Foreground="{DynamicResource PrimaryDarken}" Height="{DynamicResource EQButtonHeight}"
+        FontSize="{DynamicResource EQContentSize}" Click="CloseClicked" Margin="2,0,4,0" Padding="20,0,20,0" Content="Close" />
+    </StackPanel>
+  </Grid>
+</syncfusion:ChromelessWindow>

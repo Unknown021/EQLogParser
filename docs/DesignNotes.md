@@ -149,3 +149,337 @@ Recorded so they are not mistaken for open bugs — each was reviewed and left a
 - Consulting `Source` before `Id`, or always loading all siblings to find a `Source` match.
 - Logging overlay id collisions, re-imports, or other expected outcomes of normal sharing.
 - Adding folder-merge semantics to overlay import without a product decision.
+
+## Speech synthesis and TTS engines
+
+The audio subsystem can speak trigger callouts with one of three engines: the Windows speech API, Piper, or
+Kokoro. One speaks at a time. Which one is a user setting (`TtsEngine`), applied at startup and switchable while the
+app runs.
+
+### One engine behind ITtsEngine
+
+Each engine implements `ITtsEngine` (`EQLogParser.Audio/src`) and owns its own per player voice state. A factory walks
+the configured preference (settings key `TtsEngine`, set from the TTS Engine item of the **Tools** dropdown on the
+Triggers toolbar, alongside Dictionary and Quick Shares) and
+falls back through the remaining engines in order - a Piper whose pack is missing or will not load reaches an installed
+Kokoro before the Windows voices, which are the last resort and need no files at all - so a missing model or voice pack
+is a silent downgrade rather than an error dialog. Engine names are matched case insensitively at every boundary
+(`TtsEngineFactory.Normalize`) because the setting is plain text somebody can edit.
+
+The session's first engine is built on the thread pool from the `AudioManager` constructor, not inline: a Kokoro
+session over the 156 MB model graph takes seconds, and that constructor runs on the UI thread the moment startup
+touches `Instance`. `LoadValidVoicesAsync` is the single point that waits for the build - startup awaits it before the
+main window shows, players register only after it - so the engine field can be null only in that window.
+
+Before this seam `AudioManager` carried `_usePiper` / `_useKokoro` booleans consulted at a dozen sites — voice listing,
+default voice, per player voice binding, synthesis, sample rates, shutdown — and kept a synth object per engine inside
+its player records. Every engine therefore touched every other engine's code, and none of it could be exercised
+without the native library behind it.
+
+### What a voice is called
+
+`GetVoices()` hands out ids - `af_nicole`, `en_US-lessac-medium`, `Microsoft David Desktop` - and those exact strings are
+what a character's config stores and what an engine is told to speak. The pickers show something shorter through
+`ITtsEngine.GetVoiceDisplayName`, reached from the view layer by one converter (`VoiceNameConverter`) on the three voice
+dropdowns, so the item itself stays the id: whatever saves, matches or speaks a voice never sees the label, and no stored
+value changed.
+
+Where the label comes from is each engine's business. Kokoro reads the accent straight out of its own naming convention,
+`[locale][gender]_name`, which turns `af_nicole` into "Nicole (US)" and `bf_emma` into "Emma (GB)" - worth showing now
+that the pack carries British voices too. Piper labels a voice with the locale its model declares in `language.code`
+(`voices.json` may say so outright), settled once when the engine starts because it costs a small file read per voice;
+a name that cannot be located goes without a suffix. Windows answers with the name it was handed: "Microsoft David
+Desktop" needs no improvement, and the `(Legacy) ` marking on a System.Speech voice is information rather than noise.
+
+A third form exists because one place says a voice's name out loud. Picking a row in a voice dropdown previews it by
+speaking that name, so `ITtsEngine.GetVoiceSpokenName` returns the name with neither the identifier's leading letters nor
+the locale tag — "Nicole" from `af_nicole`, "Cori" from a Piper pack whose display label reads "Cori (GB)". Handing the
+stored value to a synthesizer instead spells it: Kokoro reads `af_heart` as letters, so choosing Heart was answered by
+somebody reciting "ay eff heart".
+
+### Synthesis threading and cache
+
+`SpeakTtsAsync`, `TestSpeakTtsAsync`, `SpeakOrSaveTtsAsync` and `TestSpeakFileAsync` are fire-and-forget for their
+callers, so they hand the work to the thread pool and never resume on the caller's context. Synthesis happens inside
+the engine behind `Task.Run`, because ONNX Runtime and SAPI block: a Kokoro sentence costs a few hundred milliseconds
+and used to run on the UI thread, freezing the window mid callout. One `SemaphoreSlim` still serializes synthesis —
+the neural engines are CPU-bound and overlapping calls only slow every caller down.
+
+Synthesized PCM is cached in the same memory cache used for audio files, keyed by engine, voice and a hash of the text
+(60 minute sliding expiry, sized in bytes so the existing 100 MB budget accounts for it). A line like `Got the level
+90` plays dozens of times a raid, so only the first occurrence pays for inference. The text is hashed rather than used
+verbatim so a long custom callout cannot produce an unbounded key.
+
+A cached phrase needs neither the gate nor an engine: those bytes belong to an engine, a voice and a text, not to
+whichever engine happens to be speaking, so the first lookup answers from the cache alone. That is what keeps twenty
+familiar callouts from queueing behind one new sentence being synthesized. Everything that can miss runs under the gate,
+where the engine cannot change underneath it.
+
+Synthesis is not the only thing that touches an engine, and the gate alone was not enough: `SetVoice`, `RemoveVoice`,
+`GetVoices` and `GetVoice` are called by the UI, synchronously, and one of them arriving while a switch releases an
+engine's native state is a use-after-free in Piper's voice table rather than a caught exception. They now run under a
+separate `_engineLock`, which the swap and the retirement also take. It is deliberately not held across synthesis — a
+callout must never wait behind a dropdown, and a dropdown must never wait behind a model.
+
+### Switching engines while running
+
+`AudioManager.SwitchEngineAsync` builds the requested engine, lets it discover its voices, re-binds every player, swaps
+it in, disposes the one it replaced, and then warms the voices that are still bound. The **TTS Engine** dialog calls it
+when you press **Use**, and after a runtime pack finishes downloading, so switching takes effect on the next callout
+instead of on the next start. The saved
+setting still decides what a fresh launch uses, and a switch that cannot be honored (model missing, native library
+refusing to load) leaves the current engine speaking rather than leaving the app without speech.
+
+Two things make swapping safe rather than merely convenient:
+
+- The whole switch runs under the synthesis `SemaphoreSlim`, so an engine is created and destroyed while nothing can be
+  speaking through it. Synthesis re-reads `_tts` *after* acquiring that gate, which is why a callout that arrives mid
+  switch cannot end up using a retired engine, nor cache PCM under the wrong engine's key. The swap itself and the
+  disposal of the retired engine additionally run under `_engineLock`, so the quick UI-side engine calls described above
+  cannot straddle them either. An engine that was built but never became active is disposed at the same point, which is
+  why a switch that fails part way through does not leak a 300 MB inference session.
+- Warm-up happens *after* the switch returns the gate, never inside it. Warm-up enters that gate only when it is free,
+  so asking from a method that already holds it means every warm-up after a switch quietly gives up.
+- A voice name from one engine means nothing to another, so `AudioManager` remembers what the host asked each player
+  to speak with (`_requestedVoices`) and replays those names to the new engine. The engine binds the names it has and
+  drops the rest, which sends that player back to the engine's default voice. Kokoro deliberately refuses to remember
+  a name it does not have: a stale name would otherwise cling to a player for the rest of its life and be spoken
+  quietly as a different voice.
+
+### Warming a voice before anything has to wait on it
+
+Speaking costs time in three separate places, and only some of it is the model: building a Piper voice is an ONNX
+session over the voice model plus the espeak-ng dictionaries; *any* engine's first synthesis warms the runtime behind it
+(arena sizing, kernel selection, the phonemizer's tables); and the audio device opens lazily on first playback. Cached
+phrases skip all of it, so a trigger that says the same dozen sentences pays once per session — the delay is on the
+first thing said with a voice, which is usually the trigger someone is waiting for.
+
+`AudioManager.WarmUpVoice` covers the parts that can be paid in advance:
+
+- **When:** a player is registered (`Add`), its voice changes (`SetVoice` — this is what the voice dropdown does, both
+  when you pick one and when an engine switch repopulates the list and selects a default) and after an engine switch,
+  for each distinct voice still bound to a player.
+- **What:** `ITtsEngine.WarmUpVoiceAsync`. Piper builds the native voice; Kokoro and Windows have nothing per voice to
+  build — every embedding arrives with the session made at engine creation — so they speak one short word into memory
+  and throw it away, which is what warms inference.
+- **Never audible and never in the way:** warm-up enters the synthesis gate only when it is free, retries briefly if
+  something is talking, and gives up rather than standing in line. Choosing a voice also speaks an audible preview, and
+  waiting behind a warm-up for that would be worse than staying cold. Whatever the retry window misses costs speed and
+  nothing else.
+- **One worker, one voice at a time:** requests queue rather than each starting a task of its own, deduped by engine and
+  voice, because registering thirty characters at a zone-in is thirty voices asking for CPU at the same moment. A voice
+  counts as prepared only when it actually got through; recording one that gave up would suppress the next attempt and
+  leave a player cold for the rest of the evening.
+
+Piper holds **one** prepared voice outside the players, under a reserved id in the native table. Previews used to build
+a voice, speak and destroy it, so every different text paid for the model again; now `ResolveAdHocSpeaker` keeps it,
+and takes the previous one out when the selection moves — which is the whole point, since otherwise an afternoon of
+trying voices leaks a hundred megabyte model per change. Two further rules keep memory flat: a preview of a voice that
+some player already speaks uses *that player's* session rather than building a second copy, and rebinding a player to a
+different voice removes the old native voice first, because replacing a table entry is not documented as releasing it.
+
+### Windows voices are proven, not assumed
+
+Windows is the only engine with no files to check: the voices live in the operating system, so "is it available?" has no
+answer short of asking one to speak. Historically the code answered *yes* unconditionally and swallowed whatever came
+back, which reads as silence with nothing in the log.
+
+Now `LoadVoicesAsync` records the verdict (`WindowsTtsEngine.IsAvailable`) and everything downstream — engine choice at
+startup, what the picker lets you click, whether a switch is honored — reads it:
+
+- **Wine is answered before anything has to fail.** `ntdll.dll` exports `wine_get_version` and real Windows never has,
+  so asking for that export is not a heuristic about build numbers or registry keys a service pack can move. The check
+  is worth its cost because the two errors are not equally bad: wrongly concluding "this is Wine" switches off the only
+  engine a machine has, while a wrong answer in the other direction just leaves the runtime probe below to catch it.
+  Loading `ntdll.dll` pinned to System32 keeps that from being spoofable by a planted copy next to the executable, and
+  the result is cached. Whisky, Bottles and CrossOver are all Wine underneath and land here too; a real Windows install
+  in a VM on Linux keeps its voices, which is the correct answer.
+- **Unknown counts as available.** The probe only runs for the engine that actually starts, so an unprobed engine must
+  not be hidden. This is the last engine standing; hiding it on a guess would silence someone who is fine.
+- **False from the runtime probe means both APIs came back empty.** WinRT `SpeechSynthesizer` and legacy SAPI are
+  checked independently and either one is enough: a machine with only legacy voices installed stays available. Windows
+  images with the speech runtime removed produce nothing from both, which is the case this catches that Wine does not.
+- **An engine with no voices is not a switch target.** `SwitchEngineAsync` asks the new engine for its voice list after
+  `LoadVoicesAsync` and refuses it if empty, staying on the current engine instead of reporting a successful switch
+  into silence.
+- If nothing at startup turns out to be usable, `LoadValidVoicesAsync` logs it. That line is the difference between a
+  bug report saying "no audio" and one that says what to fix.
+- **What this engine holds per player is two synthesizer objects, not a lock.** `_lock` covers the player table only;
+  nothing in this class serializes an utterance, on either API. Concurrency belongs to `AudioManager`, which lets one
+  synthesis run at a time across all engines — worth knowing before adding a second gate here, and before assuming a
+  second callout can be synthesized concurrently through `System.Speech`, which it cannot.
+
+The picker greys an engine out only when there is neither a way to use it nor a way to get it: Piper and Kokoro stay
+clickable while not installed because clicking them is how they get downloaded, and Windows goes grey when it has been
+caught having no voices. `GetEngineDescription` in the dialog says so in words too — the Windows voices come from the
+OS, which is why a Wine or Linux session usually has none.
+
+### What installs and what downloads
+
+The installer carries the app plus two small assemblies that `EQLogParser.Audio.dll` is compiled against
+(`KokoroSharp.dll`, `Microsoft.ML.OnnxRuntime.dll`) so the seam types resolve and an engine reports itself unavailable
+rather than failing. Everything heavy is fetched into per-user storage on demand:
+
+```
+%LOCALAPPDATA%\EQLogParser\kokoro\   bin\ (MisakiSharp, NumSharp, OpenTK, Numerics.Tensors)
+                                     native\ (onnxruntime.dll, providers_shared)
+                                     voices\ (*.npy + LICENSE)
+                                     model\kokoro-fp16.onnx
+%LOCALAPPDATA%\EQLogParser\piper-tts\  piperApi.dll and friends, voices\, espeak-ng-data\
+```
+
+`LocalApplicationData`, not `ApplicationData`: the Roaming folder is copied at logon and logoff on profile-redirected
+machines, and 230 MB of re-downloadable binaries is the worst possible thing to put on that path. EQLP's own state
+(`config\`, `logs\`, `archive\`) stays in Roaming where it belongs — roam what the user made, download what we ship.
+`TtsPackManager` owns those directories: it resolves them, downloads and verifies packs, and deletes them. Publish order
+is fixed by one fact — signing rewrites a file's tail, so the SHA-256 manifest the app verifies has to be generated from
+the signed bytes (`sign.cmd`, then manifest, then upload).
+
+Nothing here needs to load at startup: .NET resolves assembly references on first use, which is what makes hosting the
+engines remotely possible at all. Two hooks cover a pack once it exists:
+
+- `AssemblyLoadContext.Default.Resolving` answers `MisakiSharp`, `NumSharp`, `OpenTK*` and `System.Numerics.Tensors`
+  from `<kokoro>\bin`, using `Assembly.LoadFrom` on the default context rather than a private `AssemblyLoadContext`.
+  A second copy of a shared dependency in another context would not bind to the KokoroSharp that installs beside the
+  executable, and type identity across the seam matters more than isolation here.
+- `ResolvingUnmanagedDll` answers `onnxruntime.dll` and its provider stub from `<kokoro>\native`, which is what
+  `Microsoft.ML.OnnxRuntime`'s own P/Invoke stubs ask for. Piper needs neither: its import resolver loads
+  `piperApi.dll` by full path and the OS takes the dependencies sitting beside it.
+
+Both return "not mine" (null / `IntPtr.Zero`) for anything they do not have, so unrelated loads are untouched.
+The hooks are registered once, before any engine is constructed.
+
+Neither hook is a guarantee, and that distinction turned out to matter: they are asked **after** the default search has
+failed to find a name. `onnxruntime.dll` is a case where something else may answer first — see
+[Which onnxruntime.dll wins](#which-onnxruntimedll-wins) — which is why the runtime is claimed rather than resolved.
+
+There is no fallback to a copy beside the executable, and there deliberately is not one. Reading `{app}\piper-tts` when it
+was complete -- which earlier releases did, so that upgrading did not cost a re-download -- meant an engine could be
+running off files the dialog cannot update, cannot remove, and cannot match against a pinned digest, and worse: those
+files are still sitting in old build outputs, so development runs reported a working Piper nobody had downloaded. One
+location per engine, `%LOCALAPPDATA%\EQLogParser\<engine>`, owned end to end by `TtsPackManager`. `[InstallDelete]` now
+deletes what installs before packs left under `{app}`; the files are inert whether or not they are removed, so that entry
+is about reclaiming space, not about behavior.
+
+### Downloading a pack, and getting out of one
+
+An install is four jobs wearing one progress bar, and the bar is divided the way the work is: nine tenths for bytes off
+the network, then slices for hashing the archive, unpacking it, and checking every extracted file against
+`manifest.json`. Nothing sits at 90 % for a minute while the app works, which is the part people could not otherwise
+distinguish from a freeze — reading a few hundred megabytes back takes tens of seconds after a fast download.
+
+Every one of those loops watches the Cancel button through one `CancellationToken`: the transfer, the archive digest,
+each extracted entry, each verified file. `ZipArchiveEntry.ExtractToFile` is deliberately not used, because it neither
+reports bytes nor aborts before an entry finishes and one entry here is the 156 MB model. Cancellation is worth this much
+because of where the work happens: unpacking and verification run in `<engine>.staging`, an existing pack moves to
+`<engine>.retired` only once the new copy is complete and verified, and a promotion that fails puts the old copy back.
+Give up halfway and the only trace is a deleted temp archive; a pack that spoke this morning still speaks.
+
+Two free-space checks guard the job rather than one. Room for the archive is checked before the download begins — that
+check exists to save somebody's bandwidth, so it refuses only the case that cannot possibly work. Room for the extracted
+tree is checked afterwards from the zip's own central directory, which states the uncompressed size of every entry, so it
+is a measured number rather than a guessed compression ratio and it fires before files start landing. An unreadable drive
+or an unmeasurable archive counts as room enough in both: this is not the place where a disk gets argued with, and a
+disk that fills up anyway reports the real figure itself.
+
+### Kokoro model integrity
+
+The Kokoro graph (156 MB) is not part of the installer. It arrives over HTTPS inside the Kokoro runtime pack the first
+time a user opts in, which means the file the app later executes with its own privileges came off the network rather
+than out of a signed package.
+
+- `TtsPackManager` pins the SHA-256 of the archive and verifies every file in it against the pack's `manifest.json`
+  before promoting it into place, and `KokoroTtsEngine` independently pins the graph itself
+  (`ModelSha256`) and re-checks it before handing the path to onnxruntime. Two independent pins: a pack that was
+  built wrong, or changed after install, still does not get to run.
+- A verified model gets a `kokoro-fp16.onnx.sha256` marker beside it, so the hash pass costs nothing at every
+  start. A hand-placed or previously downloaded model pays for it once, then writes the marker.
+- We do not delete a model that fails verification, and we do not re-hash on every load: a mismatch is reported in
+  the log once, the engine reports itself unavailable, and the existing fallback chain picks up. Deleting a user's
+  156 MB download over a checksum we could have mispinned is the worse failure.
+- Changing `ModelFileName` (for example back to the fp32 graph) means updating `ModelSha256` in the same commit.
+  The two constants are the pin.
+
+### Piper native lookup
+
+`piperApi.dll` lives in the Piper runtime pack (`%LOCALAPPDATA%\EQLogParser\piper-tts`) and nowhere else, so it needs a
+search path of its own. The
+first implementation called `SetDllDirectory`, which is process-global and single-slot: it applied to every later
+native load by anyone in the process, silently replaced any other caller's directory, and was the cause of a real
+bug where listing Windows voices initialized Piper as a side effect.
+
+`PiperTtsEngine` now registers a `NativeLibrary` import resolver that answers exactly one library name, `piperApi.dll`,
+from whichever pack directory is in play (the engine's own copy is captured when it is built, so downloading a pack
+while an older Piper is alive cannot move files out from under it — and `initialize()` re-runs against the new
+espeak-ng data when the directory changes). Everything else returns `IntPtr.Zero` and resolves normally. Piper's own
+dependencies (`onnxruntime.dll`, `espeak-ng.dll`, `piper_phonemize.dll`) sit beside `piperApi.dll`, which the altered
+search path used by `NativeLibrary.Load` covers.
+
+### Which onnxruntime.dll wins
+
+Both speech engines load `onnxruntime.dll`, and Windows keeps **one native module per base name** for the life of a
+process: whoever maps it first holds that name, and every later request — an import from `piperApi.dll`, a P/Invoke from
+`Microsoft.ML.OnnxRuntime.dll`, even a load by absolute path to a different file — is answered out of the module list.
+So one ONNX Runtime serves the whole session, and the question is which file that is.
+
+The answer cannot be left to resolution order, because an old copy is easy to hit. `onnxruntime.dll` is not a Windows
+system DLL, but other programs install it there anyway: a machine with a 2021-vintage `C:\Windows\System32\
+onnxruntime.dll` (1.7.x) answers `DllImport("onnxruntime")` from System32 and refuses Kokoro's graph with something like
+"Unsupported model IR version" about a download that is perfectly fine. Two facts make that fatal rather than merely
+untidy:
+
+- The default search — the host's deps.json native assets, then `LoadLibraryEx` over the usual directories including
+  System32 — runs **before** .NET asks anyone's resolver. A search that *succeeds* with somebody else's file never asks
+  `ResolvingUnmanagedDll`, and a resolver registered for `Microsoft.ML.OnnxRuntime` never runs either.
+- `EQLogParser.deps.json` lists `runtimes/win-x64/native/onnxruntime.dll`, which the installer deliberately does not
+  ship (that is ~12 MB of a ~20 MB installer, and the packs carry it). A declared native asset that is not on disk is
+  simply not found, so a clean install falls through to the operating system while a development run — whose build
+  output does have the file — resolves it correctly. That asymmetry is why this bug showed up on a VM and not on the
+  machine that reproduced everything else.
+
+What works instead is being **resident first**, which is `TtsPackManager.PreferMatchingOnnxRuntime()`: it loads EQLP's
+own copy by absolute path, so from then on every request for the name is answered with ours. Candidate order is
+`<kokoro>\native`, then `<piper-tts>`: Kokoro's copy leads because it is published together with the managed wrapper
+installed beside the executable and repacked whenever that wrapper moves, while Piper's pack carries the same build today
+and either serves. It runs once, from the thread pool, before the session's first engine is built (`AudioManager`) — not
+from the constructor, because mapping a 12 MB runtime is not startup work for the UI thread — and again from both engines
+for a pack downloaded mid-session. Whichever engine gets there first is fine; that is the point of keeping the choice in
+one place rather than in an engine.
+
+Three supports around the claim, each covering a case the others cannot:
+
+- `EnsureOnnxRuntimeImportResolver` pins `Microsoft.ML.OnnxRuntime`'s own imports to the approved folder. It cannot beat
+  System32 — nothing registered from managed code can, once the default search finds a file — so its job is the mirror
+  failure: when EQLP's copy is **missing** it throws instead of returning `IntPtr.Zero`, because handing the name back
+  is exactly how a foreign runtime gets in. Fail loudly on a decision we own.
+- After claiming, `IsForeignOnnxRuntimeResident()` asks which file is actually mapped — an absolute-path load returns the
+  already-resident module, so success alone does not prove it is ours — and Kokoro refuses to start when the answer is a
+  path outside its packs and program folder. The alternative is 156 MB of "re-download your model" advice aimed at a
+  file that is fine.
+- `WarnOnRuntimeDrift` compares the mapped module's version with the wrapper installed beside the executable, since the
+  pack publishes the two together and a mismatch means one of them moved alone. Warn, not refuse: major.minor is not the
+  whole contract and an engine that speaks beats a tidy log.
+
+### The MSVC runtime the same way
+
+`onnxruntime.dll` imports `msvcp140.dll`, `msvcp140_1.dll`, `vcruntime140.dll` and `vcruntime140_1.dll`. Those four
+install app-local beside `EQLogParser.exe` (`EQLogParser\redist`, Microsoft-signed and left that way) so a machine with no
+Visual C++ redistributable can still speak — historically that was exactly where Kokoro failed on Wine while Piper worked,
+and the difference was never the ONNX build.
+
+They are claimed by name in the same call, before ONNX Runtime is mapped, and that claim is the load-bearing part. A
+runtime loaded from `<kokoro>\native` is mapped with an altered search path — its own directory, then the system
+Directories — so the program folder is **not** in that list, and four DLLs beside `EQLogParser.exe` would do nothing for
+it unless those names were already resident. Claiming them first means ONNX's imports are answered from the module list,
+which is also why the claim runs before the runtime and not after.
+
+The consequence of installing them flat in `{app}` is worth stating plainly: the search order puts the program folder
+ahead of System32, so these four are what this process maps even on a machine that has a newer redistributable. That is
+Microsoft's *local deployment* of the CRT and it holds under one condition — **the checked-in copies stay current**
+(`EQLogParser\redist\README.md` says how to refresh them). The CRT serves older binaries forward, so an up-to-date
+app-local copy is a safe floor for everything in the process: Syncfusion's natives, NAudio's, ONNX Runtime's. Which file
+answered each name is visible twice over — in `scripts\MeasureLoadedAssemblies.ps1` output, and in the Debug lines
+`ClaimVisualCppRuntimes` writes.
+
+Whether that makes Bottles' `vcredist2022` dependency redundant is a separate question with a fresh-prefix test in front
+of it (`bottles/Games/eqlogparser.yml` keeps it until someone runs one).

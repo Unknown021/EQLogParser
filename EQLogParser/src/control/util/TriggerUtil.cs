@@ -305,6 +305,7 @@ namespace EQLogParser
       {
         toTrigger.Private = fromTrigger.Private;
         toTrigger.AltTimerName = TextUtils.Trim(fromTrigger.AltTimerName);
+        toTrigger.TimerNameDynamic = fromTrigger.TimerNameDynamic;
         toTrigger.Comments = TextUtils.Trim(fromTrigger.Comments);
         toTrigger.DurationSeconds = fromTrigger.DurationSeconds;
         toTrigger.Pattern = TextUtils.Trim(fromTrigger.Pattern);

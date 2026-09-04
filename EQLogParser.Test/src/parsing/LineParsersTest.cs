@@ -119,6 +119,26 @@ namespace EQLogParser
       Assert.IsFalse(cast.Interrupted);
     }
 
+    /* What a spin-off client like EverQuest Legends produces: the cast line parses fine, but the name is not in the
+     * bundled spell data. The record keeps an IsUnknown stub instead of nothing, and it stays out of the real DB -
+     * later casts reuse the same stub. */
+    [TestMethod]
+    public void Process_UnknownSpellName_RecordsCastWithAnUnknownStub()
+    {
+      var spell = $"Totally New Spell {Guid.NewGuid():N}";
+      Assert.IsNull(_dataStore.GetSpellByName(spell));
+
+      var ok = CastLineParser.Process(Line($"You begin casting {spell}.", 10));
+      Assert.IsTrue(ok);
+
+      var cast = RecordsStore.Instance.GetSpellsDuring(0, 100).Select(r => r.Item2)
+        .OfType<SpellCast>().Single();
+      Assert.AreEqual(spell, cast.Spell);
+      Assert.IsNotNull(cast.SpellData);
+      Assert.IsTrue(cast.SpellData.IsUnknown);
+      Assert.AreSame(cast.SpellData, EQDataStore.Instance.AddUnknownSpell(spell));
+    }
+
     [TestMethod]
     public void Process_OtherActivates_RrecordsCastForThatPlayer()
     {
@@ -208,7 +228,7 @@ namespace EQLogParser
       Assert.AreEqual(ConfigUtil.PlayerName, loot.Player);
       Assert.IsTrue(loot.IsCurrency);
       // 28p + 7g + 2s + 5c in copper
-      Assert.AreEqual(28 * 1000 + 7 * 100 + 2 * 10 + 5, (int)loot.Quantity);
+      Assert.AreEqual((28 * 1000) + (7 * 100) + (2 * 10) + 5, (int)loot.Quantity);
       Assert.AreEqual("28 Platinum, 7 Gold, 2 Silver, 5 Copper", loot.Item);
     }
 

@@ -1,4 +1,4 @@
-﻿<UserControl x:Class="EQLogParser.TriggersView"
+<UserControl x:Class="EQLogParser.TriggersView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
@@ -15,6 +15,7 @@
   <UserControl.Resources>
     <!-- Variable input width - can be themed if needed -->
     <sys:Double x:Key="VariableInputWidth">160</sys:Double>
+    <local:VoiceNameConverter x:Key="VoiceNameConverter" />
   </UserControl.Resources>
 
   <Grid>
@@ -38,7 +39,13 @@
           <TextBlock x:Name="advancedText" Text="Switch to Advanced" Cursor="Hand" TextWrapping="Wrap" FontSize="{DynamicResource EQContentSize}" Foreground="{DynamicResource EQWarnForegroundBrush}" VerticalAlignment="Bottom" Padding="0,0,0,1"/>
         </Border>
       </Grid>
-      <ComboBox x:Name="voices" SelectedIndex="0" Margin="0,0,8,2" SelectionChanged="OptionsChanged" />
+      <ComboBox x:Name="voices" SelectedIndex="0" Margin="0,0,8,2" SelectionChanged="OptionsChanged">
+        <ComboBox.ItemTemplate>
+          <DataTemplate>
+            <TextBlock Text="{Binding Converter={StaticResource VoiceNameConverter}}" />
+          </DataTemplate>
+        </ComboBox.ItemTemplate>
+      </ComboBox>
       <ComboBox x:Name="rateOption" SelectedIndex="0" Margin="0,0,8,2" SelectionChanged="OptionsChanged">
         <ComboBoxItem>Default Voice Rate</ComboBoxItem>
         <ComboBoxItem>Increased Rate 1</ComboBoxItem>
@@ -55,8 +62,15 @@
           <syncfusion:SfRangeSlider Name="volumeSlider" Height="300" Minimum="0" Maximum="100" LabelOrientation="Horizontal" TickFrequency="10" ValuePlacement="BottomRight" ShowValueLabels="True" Orientation="Vertical" PreviewMouseLeftButtonUp="VolumeSliderChanged"/>
         </Border>
       </Popup>
-      <Button x:Name="dictButton" Margin="0,0,4,1" Padding="8,0,8,0" IsEnabled="True" Height="{DynamicResource EQButtonHeight}"  ToolTip="Phonetic Dictionary" Click="DictionaryClick">Dictionary</Button>
-      <Button x:Name="quickShareButton" Margin="0,0,8,1" Padding="8,0,8,0" IsEnabled="True" Height="{DynamicResource EQButtonHeight}"  ToolTip="Quick Share Settings and Received Log" Click="QuickShareClick">Quick Shares</Button>
+      <!-- What were the TTS Engine / Dictionary / Quick Shares buttons; the items keep those tooltips and reuse their Click handlers. -->
+      <syncfusion:DropDownButtonAdv Label="Tools" IconHeight="0" IconWidth="5" Height="{DynamicResource EQButtonHeight}" Padding="4,0,4,0" Margin="0,0,8,1"
+                                    ToolTip="Open the Phonetic Dictionary, Quick Share settings, or choose the TTS engine">
+        <syncfusion:DropDownMenuGroup>
+          <syncfusion:DropDownMenuItem Header="Dictionary" ToolTip="Phonetic Dictionary" Click="DictionaryClick" />
+          <syncfusion:DropDownMenuItem Header="Quick Shares" ToolTip="Quick Share Settings and Log of received Quick Shares" Click="QuickShareClick" />
+          <syncfusion:DropDownMenuItem Header="TTS Engine" ToolTip="Choose the Text-to-Speech engine" Click="TtsEngineClick" />
+        </syncfusion:DropDownMenuGroup>
+      </syncfusion:DropDownButtonAdv>
     </StackPanel>
     <Grid x:Name="mainGrid" Grid.Row="1">
       <Grid.ColumnDefinitions>
@@ -449,6 +463,8 @@
                 
                 <!-- Trigger Timer Options -->
                 <syncfusion:PropertyGridItem CategoryName="Basic Timer Options" PropertyName="AltTimerName" DisplayName="Alternate Timer Name"  Visibility="Collapsed" Description="The Name of the Timer defaults to the name of the Trigger. Set this property if an Alternate Name is required. See the documentation on Using Trigger Variables for additional information."/>
+                <syncfusion:PropertyGridItem CategoryName="Basic Timer Options" PropertyName="TimerNameDynamic" DisplayName="Dynamic Timer Name" Visibility="Collapsed"
+                  Description="If the Timer name uses a trigger variable, the name updates whenever that variable changes while the Timer is running. Uncheck this option to keep the value captured when the Timer started."/>
                 <syncfusion:PropertyGridItem CategoryName="Basic Timer Options" x:Name="timerDurationItem" PropertyName="DurationTimeSpan" DisplayName="Duration (hh:mm:ss)" Visibility="Collapsed" Description="Number of Minutes/Seconds after the Trigger has been executed before the Timer completes." />
                 <syncfusion:PropertyGridItem CategoryName="Basic Timer Options" x:Name="timerShortDurationItem" PropertyName="DurationSeconds" DisplayName="Duration (0.2s -> 2.0s)" Visibility="Collapsed" Description="Number of Milliseconds after the Trigger has been executed before the Timer completes." />
                 <syncfusion:PropertyGridItem CategoryName="Basic Timer Options" PropertyName="EndSoundOrText" DisplayName="End Sound/Text to Speak"  Visibility="Collapsed" Description="The Phrase to be spoken or sound file to play at completion of the Timer. For additional wav files, copy them to Program Files\EQLogParser\data\sounds. Also, see the documentation on Using Trigger Variables for additional information."/>

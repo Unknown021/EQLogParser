@@ -8,15 +8,13 @@ using SoundTouch.Net.NAudioSupport;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
-using Windows.Media.SpeechSynthesis;
-using Windows.Storage.Streams;
 
 namespace EQLogParser.Audio
 {
@@ -27,19 +25,83 @@ namespace EQLogParser.Audio
   public partial class AudioManager : IAudioManager, IDisposable
   {
     public const string AudioCacheKey = "audio-cache:";
+    public const string WindowsEngine = WindowsTtsEngine.EngineName;
+    public const string PiperEngine = PiperTtsEngine.EngineName;
+    public const string KokoroEngine = KokoroTtsEngine.EngineName;
     public event Action<bool> DeviceListChanged;
     public static AudioManager Instance => Lazy.Value;
 
     private static readonly ILog Log = LogManager.GetLogger(MethodBase.GetCurrentMethod()?.DeclaringType);
     private static readonly Lazy<AudioManager> Lazy = new(() => new AudioManager());
     private const int LATENCY = 72;
+
+    /*
+     * Warm-up takes the synthesis gate only when nothing else holds it, retrying briefly in case a preview is playing,
+     * and gives up rather than getting in line ahead of real speech. See WarmUpVoice.
+     */
+    private const int WarmUpAttempts = 6;
+    private const int WarmUpRetryDelayMs = 400;
+
+    /*
+     * Ceiling on voices waiting to be warmed. A zone-in registers dozens of players at once and most of them will not
+     * be spoken with this fight; when the list is full the oldest request is dropped, because a voice someone changed
+     * two minutes ago matters less than the one just picked.
+     */
+    private const int MaxWarmUpQueue = 8;
     private readonly ConcurrentDictionary<string, PlayerAudio> _playerAudios = [];
     private readonly ConcurrentDictionary<string, bool> _isRenderDevice = new();
-    private readonly SemaphoreSlim _semaphore = new(1, 1);
+    /*
+     * Engines hold process wide native state (Piper's voice table, Kokoro's inference session), so only one synthesis
+     * runs at a time and no engine is created or released while another thread speaks through one - except the
+     * startup build in the constructor, which runs before any player can be registered to speak with. A phrase
+     * already in the cache takes neither this gate nor an engine at all, which is what keeps a burst of familiar
+     * callouts from queueing behind a neural synthesis of something new.
+     * See docs/DesignNotes.md -> Speech synthesis and TTS engines.
+     */
+    private readonly SemaphoreSlim _synthGate = new(1, 1);
+
+    /*
+     * Serializes the short engine calls - binding a voice, dropping one, asking what a player speaks - against an
+     * engine swap, so nothing can reach an engine whose native state has just been released. Deliberately not held
+     * across synthesis: that is _synthGate's job, and a callout must never be delayed by someone using a dropdown.
+     */
+    private readonly object _engineLock = new();
     private readonly AudioDeviceNotificationClient _notificationClient = new();
     private readonly object _deviceLock = new();
-    private readonly bool _usePiper;
-    private readonly List<VoiceInformation> _validVoices = [];
+
+    /*
+     * Swapped in place when the user picks another engine mid session. volatile so a thread that reads it without the
+     * lock sees whoever is actually speaking; anything about to call into it holds _engineLock first, except synthesis
+     * and warm-up, which run under _synthGate for exactly as long as a switch holds it.
+     *
+     * It is null only while _engineReady is out: startup awaits LoadValidVoicesAsync before the main window shows, and
+     * players register and voice dropdowns open only after it, so no engine call can land in that window.
+     */
+    private volatile ITtsEngine _tts;
+
+    /*
+     * The build of the engine the session starts with, running on the thread pool from the constructor. The one point
+     * that waits for it is LoadValidVoicesAsync; see the comment above _tts for why nothing else can get there first.
+     */
+    private readonly Task _engineReady;
+
+    /*
+     * What the host asked each player to speak with. The engine decides whether it can honor that name, and this is
+     * what gets handed to the next engine when the user switches engines without restarting.
+     */
+    private readonly ConcurrentDictionary<string, string> _requestedVoices = [];
+
+    /*
+     * Warm-up bookkeeping, all of it under _warmLock: the voices worth preparing, the set that keeps one voice in the
+     * list once, the last voice confirmed prepared, and whether the single worker is running. A voice is recorded as
+     * warm only when it actually got through, so a warm-up that gave up does not suppress the next attempt.
+     */
+    private readonly object _warmLock = new();
+    private readonly Queue<(string Voice, string Key)> _warmQueue = [];
+    private readonly HashSet<string> _warmQueued = [];
+    private string _warmedVoice;
+    private bool _warmWorkerRunning;
+
     private MMDeviceEnumerator _deviceEnumerator;
     private Guid _selectedDeviceGuid = Guid.Empty;
     private bool _disposed;
@@ -50,12 +112,20 @@ namespace EQLogParser.Audio
     // Dependencies injected by host application
     private static IMemoryCache _cache;
     private static Action<string> _showError;
+    private static string _preferredEngine;
 
     /// <summary>Call once at app startup to inject dependencies.</summary>
-    public static void Initialize(IMemoryCache cache, Action<string> showError = null)
+    /// <param name="preferredEngine">One of <see cref="WindowsEngine"/>, <see cref="PiperEngine"/>, or
+    /// <see cref="KokoroEngine"/>. If null/empty or the engine isn't available, falls back to the first
+    /// available engine in Piper, Kokoro, Windows order.</param>
+    public static void Initialize(IMemoryCache cache, Action<string> showError = null, string preferredEngine = null)
     {
       _cache = cache;
       _showError = showError;
+
+      // The setting can have been edited by hand, and every comparison from here on is against the names this build
+      // uses. Normalizing once at the boundary is what keeps "piper" meaning Piper.
+      _preferredEngine = TtsEngineFactory.Normalize(preferredEngine);
     }
 
     private AudioManager()
@@ -64,10 +134,243 @@ namespace EQLogParser.Audio
       _deviceUpdateTimer = new Timer(DoUpdateDeviceList, null, Timeout.Infinite, Timeout.Infinite);
       _ = InitAudio();
 
-      if (PiperTts.Initialize())
+      // The speech runtimes are downloaded rather than installed, so the loaders need to know where a pack lives
+      // before an engine built against it reaches for a type or a native library.
+      TtsPackManager.EnsureResolversRegistered();
+
+      /*
+       * Built on the thread pool: a Kokoro session over the 156 MB graph takes seconds, and this constructor runs on
+       * whatever thread touches Instance first - the UI thread at startup. It does not take the synthesis gate: nothing
+       * can synthesize while it is out (players register only after LoadValidVoicesAsync returns, which startup awaits
+       * before showing the main window), and a fire-and-forget task must not be left holding the gate if the app
+       * closes before it finishes.
+       */
+      _engineReady = Task.Run(() =>
       {
-        Log.Info("Using piper-tts");
-        _usePiper = true;
+        /*
+         * One decision about ONNX Runtime before either engine can make it by accident: EQLP's own onnxruntime.dll is
+         * mapped here so that it holds the module name for this process, whichever engine gets built first. Both packs
+         * carry the same build and only one of them -- or worse, a copy another program put in System32 -- can serve
+         * the process, so the choice has to be made once and early. On this thread and not in the constructor: mapping
+         * a 12MB runtime is not work for the UI thread at startup.
+         */
+        TtsPackManager.PreferMatchingOnnxRuntime();
+
+        ITtsEngine engine;
+
+        try
+        {
+          engine = TtsEngineFactory.Create(_preferredEngine);
+        }
+        catch (Exception ex)
+        {
+          // The factory guards every engine itself and is not expected to throw, but a null here would reach every
+          // caller of Instance, so the last resort is the engine that needs nothing on disk.
+          Log.Error("Unable to create the TTS engine", ex);
+          engine = new WindowsTtsEngine();
+        }
+
+        if (_disposed)
+        {
+          // The app closed while the build was out; there is no session left for this engine to speak for.
+          engine.Dispose();
+          return;
+        }
+
+        _tts = engine;
+
+        // A milestone worth having in a bug report; Windows is the boring default, so stay quiet there.
+        if (engine.Name is KokoroEngine or PiperEngine)
+        {
+          Log.Info($"Using {engine.Name.ToLowerInvariant()}-tts");
+        }
+      });
+    }
+
+    public bool IsEngineAvailable(string engine) => EngineIsAvailable(TtsEngineFactory.Normalize(engine));
+
+    public bool IsEngineDownloaded(string engine) => TtsPackManager.IsPackOnDisk(TtsEngineFactory.Normalize(engine));
+
+    public long GetEngineDownloadBytes(string engine) =>
+      TtsPackManager.GetDownloadBytes(TtsEngineFactory.Normalize(engine));
+
+    public Task<bool> InstallEngineAsync(string engine, IProgress<float> progress,
+      CancellationToken cancellationToken = default) =>
+      TtsPackManager.InstallAsync(TtsEngineFactory.Normalize(engine), progress, cancellationToken);
+
+    /*
+     * Reclaims the space a pack uses. The engine currently speaking keeps its native libraries mapped for the life of
+     * the process on Windows, so removing that one would leave a directory half deleted and an engine that still
+     * claims to work; the caller picks another engine first.
+     */
+    public bool RemoveEngineFiles(string engine)
+    {
+      var target = TtsEngineFactory.Normalize(engine);
+
+      if (string.IsNullOrEmpty(target) || string.Equals(target, GetActiveEngine(), StringComparison.OrdinalIgnoreCase))
+      {
+        return false;
+      }
+
+      return TtsPackManager.Remove(target);
+    }
+
+    /// <summary>Every engine the app knows how to drive, whether or not its runtime pack is installed. The picker
+    /// lists these so a download can be offered from the same place the engine is chosen.</summary>
+    public static List<string> GetAllEngines() => [PiperEngine, KokoroEngine, WindowsEngine];
+
+    private static bool EngineIsAvailable(string engine) => engine switch
+    {
+      // Not assumed: the Windows voices are available until something proves otherwise, which they do on Wine and on
+      // Windows images with the speech runtime removed. See WindowsTtsEngine.IsAvailable.
+      WindowsEngine => WindowsTtsEngine.IsAvailable(),
+      _ => TtsPackManager.ResolveRoot(engine) is not null
+    };
+
+    /// <summary>The engine actually in use for this running session.</summary>
+    public string GetActiveEngine() => _tts.Name;
+
+    /// <summary>Switches the speech engine without a restart; only engines whose runtime pack is installed can be
+    /// selected. Returns false when the switch did not happen, leaving the current engine speaking.</summary>
+    public async Task<bool> SwitchEngineAsync(string engine)
+    {
+      if (_disposed)
+      {
+        return false;
+      }
+
+      var wanted = TtsEngineFactory.Normalize(engine);
+
+      if (string.IsNullOrEmpty(wanted))
+      {
+        return false;
+      }
+
+      // Already speaking it, or nothing on disk to speak it with. Reported as "no switch" either way; the picker tells
+      // those two apart from what it can see on disk.
+      if (string.Equals(wanted, GetActiveEngine(), StringComparison.OrdinalIgnoreCase) || !EngineIsAvailable(wanted))
+      {
+        return string.Equals(wanted, GetActiveEngine(), StringComparison.OrdinalIgnoreCase);
+      }
+
+      var (switched, voices) = await SwitchUnderGateAsync(wanted).ConfigureAwait(false);
+
+      if (!switched)
+      {
+        return false;
+      }
+
+      /*
+       * Warm the new engine now that the gate is back. This cannot happen inside the switch: warm-up enters that gate
+       * only when it is free, and the switch holds it for as long as it takes to build a model, so asking from in
+       * there means every warm-up quietly gives up and the first callout after a switch pays for everything.
+       *
+       * Distinct voices only: a machine with six characters configured speaks with up to six of them, and each of
+       * these is one short word.
+       */
+      foreach (var voice in voices)
+      {
+        WarmUpVoice(voice);
+      }
+
+      return true;
+    }
+
+    /*
+     * The part of a switch that needs the synthesis gate: build the new engine, hand it the players, swap it in, and
+     * let go of the one it replaced. Returns whether the switch happened and which voices are worth warming once the
+     * gate is back.
+     */
+    private async Task<(bool Switched, string[] Voices)> SwitchUnderGateAsync(string wanted)
+    {
+      var previous = _tts;
+
+      // held for the whole switch: creation and disposal both touch process wide native state, and no synthesis may
+      // run against an engine that is being created or torn down
+      await _synthGate.WaitAsync().ConfigureAwait(false);
+
+      var next = (ITtsEngine)null;
+      var retired = (ITtsEngine)null;
+      var voices = Array.Empty<string>();
+
+      try
+      {
+        // Creation is where the cost is: Kokoro builds an inference session over a 156 MB graph and Windows proves
+        // every voice by synthesizing a word into a stream. Callouts that arrive meanwhile wait on this gate, which
+        // is still kinder than speaking half of one engine and half of the other.
+        next = await Task.Run(() => TtsEngineFactory.CreateNamed(wanted)).ConfigureAwait(false);
+
+        if (next is null)
+        {
+          Log.Debug($"Unable to switch the TTS engine to {wanted}; staying on {previous.Name}.");
+          return (false, voices);
+        }
+
+        try
+        {
+          // Nothing else can reach this engine yet - _tts still answers for the session - so these need no lock.
+          await next.LoadVoicesAsync().ConfigureAwait(false);
+
+          // An engine that has no voice at all cannot speak, whatever its name is. Switching to one would report
+          // success and then deliver silence; the current engine keeps the microphone.
+          if (next.GetVoices().Count == 0)
+          {
+            Log.Debug($"{wanted} has no usable voices; staying on {previous.Name}.");
+            return (false, voices);
+          }
+
+          foreach (var requested in _requestedVoices)
+          {
+            next.SetVoice(requested.Key, requested.Value);
+          }
+        }
+        catch (Exception ex)
+        {
+          // A half prepared engine is dropped where every unusable one is dropped, below.
+          Log.Error($"Unable to prepare the {wanted} TTS engine", ex);
+          return (false, voices);
+        }
+
+        /*
+         * Swapping and retiring belong together under _engineLock: a voice being bound to a player either finishes
+         * against the old engine or starts against the new one, never across both. The new engine keeps whatever the
+         * players asked for that it recognizes; a name it does not have was already dropped by SetVoice.
+         */
+        lock (_engineLock)
+        {
+          retired = previous;
+          _tts = next;
+          ResetWarmUpState();
+        }
+
+        var active = next;
+        next = null; // owned by _tts from here on, so there is nothing left to clean up below
+
+        voices = [.. _requestedVoices.Values.Distinct(StringComparer.OrdinalIgnoreCase)];
+
+        // A milestone worth having in a bug report; Windows is the boring default, so stay quiet there.
+        if (active.Name is KokoroEngine or PiperEngine)
+        {
+          Log.Info($"Using {active.Name.ToLowerInvariant()}-tts");
+        }
+
+        return (true, voices);
+      }
+      finally
+      {
+        /*
+         * Both disposals run under _engineLock while this still holds the gate, so nothing can be speaking with either
+         * engine and a voice call that was already in flight against the retired one has finished. next is set only
+         * when an engine was built and never became active, retired only when one was replaced: releasing the wrong
+         * one here would take the native voices away from the engine still speaking.
+         */
+        lock (_engineLock)
+        {
+          next?.Dispose();
+          retired?.Dispose();
+        }
+
+        ReleaseSynthGate();
       }
     }
 
@@ -76,99 +379,93 @@ namespace EQLogParser.Audio
       _showError?.Invoke("Unable to Play sound. No audio device?");
     }
 
+    /* Releasing after the manager has been disposed is normal during shutdown; there is nobody left to wait. */
+    private void ReleaseSynthGate()
+    {
+      try
+      {
+        _synthGate.Release();
+      }
+      catch (ObjectDisposedException)
+      {
+        // ignore: the app is closing
+      }
+    }
+
     public int GetVolume() => (int)(_appVolume * 100.0f);
     public void SetVolume(int volume) => _appVolume = volume / 100.0f;
 
+    /*
+     * Proves the engine that started the session. Takes the synthesis gate because proving voices is engine lifecycle
+     * work, the same as the creation and release a switch performs; nothing may speak with an engine while it runs,
+     * and this must not run against an engine somebody else has already retired. Also the single point that waits for
+     * the constructor's thread pool build of that engine.
+     */
     public async Task LoadValidVoicesAsync()
     {
-      if (!PiperTts.Initialize() && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240) && _validVoices.Count == 0)
+      await _engineReady.ConfigureAwait(false);
+
+      var engine = _tts;
+
+      await _synthGate.WaitAsync().ConfigureAwait(false);
+
+      try
       {
-        SpeechSynthesizer synth = null;
-        IReadOnlyList<VoiceInformation> voices;
+        await engine.LoadVoicesAsync().ConfigureAwait(false);
+      }
+      finally
+      {
+        ReleaseSynthGate();
+      }
 
-        try
-        {
-          synth = new SpeechSynthesizer();
-          voices = SpeechSynthesizer.AllVoices; // this can also throw on some machines
-        }
-        catch
-        {
-          synth?.Dispose();
-          return;
-        }
-
-        try
-        {
-          foreach (var voice in voices)
-          {
-            if (await IsVoicePlayableAsync(synth, voice))
-            {
-              // prefer default first
-              if (SpeechSynthesizer.DefaultVoice?.Id == voice?.Id)
-              {
-                _validVoices.Insert(0, voice);
-              }
-              else
-              {
-                _validVoices.Add(voice);
-              }
-            }
-          }
-        }
-        finally
-        {
-          synth.Dispose();
-        }
+      // By now the engine that started the session has been asked to prove its voices, which is the earliest point
+      // where "there is no speech on this machine" is knowable. Worth a log line: from the user's side it is only
+      // silence, and that makes for a bug report with nothing in it.
+      if (!EngineIsAvailable(engine.Name))
+      {
+        Log.Warn($"{engine.Name} TTS has no usable voices on this machine. Callouts stay silent until an engine is " +
+          "enabled on the TTS Engine screen.");
       }
     }
 
     public List<string> GetVoiceList()
     {
-      if (_usePiper) return PiperTts.GetVoiceList();
-      var list = new List<string>();
+      var engine = _tts;
 
-      try
+      lock (_engineLock)
       {
-        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240))
-        {
-          foreach (var voice in _validVoices)
-          {
-            if (voice?.DisplayName is string name)
-            {
-              list.Add(name);
-            }
-          }
-        }
-
-        using var sapi = new System.Speech.Synthesis.SpeechSynthesizer();
-#pragma warning disable CA1304 // If culture info is used then not all voices are returned
-        foreach (var voice in sapi.GetInstalledVoices())
-        {
-          if (voice is not null && voice.VoiceInfo is System.Speech.Synthesis.VoiceInfo info && !string.IsNullOrEmpty(info.Name))
-          {
-            list.Add("(Legacy) " + info.Name);
-          }
-        }
-#pragma warning restore CA1304 // Specify CultureInfo
+        return engine.GetVoices();
       }
-      catch (Exception)
-      {
-        Log.Error("Unable to read Voices from Windows SpeechSynthesizer.");
-      }
-
-      return list;
     }
 
     public string GetDefaultVoice()
     {
-      if (_usePiper) return PiperTts.GetDefaultVoice();
+      var engine = _tts;
 
-      if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240) && GetVoiceInfo(null) is VoiceInformation { } voiceInfo)
+      lock (_engineLock)
       {
-        return voiceInfo.DisplayName;
+        return engine.GetDefaultVoice();
       }
+    }
 
-      return string.Empty;
+    public string GetVoiceDisplayName(string voice)
+    {
+      var engine = _tts;
+
+      lock (_engineLock)
+      {
+        return engine.GetVoiceDisplayName(voice);
+      }
+    }
+
+    public string GetVoiceSpokenName(string voice)
+    {
+      var engine = _tts;
+
+      lock (_engineLock)
+      {
+        return engine.GetVoiceSpokenName(voice);
+      }
     }
 
     public void SelectDevice(string id)
@@ -182,21 +479,194 @@ namespace EQLogParser.Audio
 
     public void SetVoice(string id, string voice)
     {
-      if (!string.IsNullOrEmpty(voice) && _playerAudios.TryGetValue(id, out var playerAudio))
+      if (!string.IsNullOrEmpty(voice) && _playerAudios.ContainsKey(id))
       {
-        lock (playerAudio)
-        {
-          LoadVoice(id, voice, playerAudio);
-        }
+        _requestedVoices[id] = voice;
+        BindVoice(id, voice);
+        WarmUpVoice(voice);
       }
     }
 
     public void Add(string id, string voice)
     {
-      var audio = new PlayerAudio();
-      LoadVoice(id, voice, audio);
-      _playerAudios.TryAdd(id, audio);
+      _requestedVoices[id] = voice;
+      _playerAudios.TryAdd(id, new PlayerAudio());
+      BindVoice(id, voice);
+      WarmUpVoice(voice);
+    }
 
+    /*
+     * Binds a player to a voice on whatever engine speaks now. Under _engineLock because a voice is engine state: for
+     * Piper this builds an ONNX session in a native table that the next engine swap releases wholesale, so binding may
+     * not straddle a swap. It is not cheap (a few hundred milliseconds for a first voice) and callers are the UI, which
+     * is why it is never held across synthesis.
+     */
+    private void BindVoice(string id, string voice)
+    {
+      var engine = _tts;
+
+      lock (_engineLock)
+      {
+        engine.SetVoice(id, voice);
+      }
+    }
+
+    /*
+     * Get a voice ready to speak so the first thing said with it is not slow: building a Piper voice is an ONNX
+     * session plus espeak-ng dictionaries, and any engine's first synthesis also warms the runtime behind it. Called
+     * when a player is registered, when its voice changes - which is what the voice dropdown does - and after an
+     * engine switch. Nothing plays, and the work happens in the background.
+     *
+     * This is a nicety, not a requirement: every path here still synthesizes correctly if warm-up never ran, only the
+     * first utterance pays for it.
+     */
+    private void WarmUpVoice(string voice)
+    {
+      if (_disposed)
+      {
+        return;
+      }
+
+      var engine = _tts;
+      var target = string.IsNullOrEmpty(voice) ? SpokenVoice(engine, null) : voice;
+
+      if (string.IsNullOrEmpty(target))
+      {
+        return;
+      }
+
+      // A name belongs to an engine: the same name on another one is a different voice and has to be prepared again.
+      var key = $"{engine.Name}:{target}";
+
+      lock (_warmLock)
+      {
+        // Already prepared, or already on the list to be. One short synthesis per voice per engine is the whole point.
+        if (string.Equals(_warmedVoice, key, StringComparison.OrdinalIgnoreCase) || !_warmQueued.Add(key))
+        {
+          return;
+        }
+
+        while (_warmQueue.Count >= MaxWarmUpQueue && _warmQueue.TryDequeue(out var dropped))
+        {
+          _warmQueued.Remove(dropped.Key);
+        }
+
+        _warmQueue.Enqueue((target, key));
+
+        if (_warmWorkerRunning)
+        {
+          return;
+        }
+
+        _warmWorkerRunning = true;
+      }
+
+      _ = Task.Run(WarmUpWorkerAsync);
+    }
+
+    /*
+     * What this engine would answer for a player, or its default voice when there is no player. That is engine state,
+     * so it is read under _engineLock like every other call into an engine; it is also cheap enough for a UI thread.
+     */
+    private string SpokenVoice(ITtsEngine engine, string playerId)
+    {
+      lock (_engineLock)
+      {
+        return playerId is not null ? engine.GetVoice(playerId) : engine.GetDefaultVoice();
+      }
+    }
+
+    /*
+     * One worker for the whole list, because warming is CPU work nobody is waiting on: registering thirty characters at
+     * a zone-in must not start thirty warm-ups at once, and none of them may hold up anything audible. Each voice
+     * slips into the synthesis gate only when that gate is free, which is what keeps it from building or releasing a
+     * native voice while another thread speaks through one - choosing a voice speaks a preview straight away, and that
+     * preview would otherwise wait behind this. Speech that stays busy makes a warm-up retry, then give up; the voice
+     * stays cold until something asks again, which costs nothing but speed.
+     */
+    private async Task WarmUpWorkerAsync()
+    {
+      while (!_disposed)
+      {
+        (string Voice, string Key) item;
+
+        lock (_warmLock)
+        {
+          if (!_warmQueue.TryDequeue(out item))
+          {
+            _warmWorkerRunning = false;
+            return;
+          }
+
+          _warmQueued.Remove(item.Key);
+        }
+
+        var prepared = false;
+
+        for (var attempt = 0; attempt < WarmUpAttempts && !_disposed; attempt++)
+        {
+          bool taken;
+
+          try
+          {
+            taken = await _synthGate.WaitAsync(0).ConfigureAwait(false);
+          }
+          catch (ObjectDisposedException)
+          {
+            // The app is closing and nothing needs warming.
+            return;
+          }
+
+          if (!taken)
+          {
+            await Task.Delay(WarmUpRetryDelayMs).ConfigureAwait(false);
+            continue;
+          }
+
+          try
+          {
+            // The engine may have changed since this was queued. Warm what is speaking now rather than what was
+            // selected then; an engine handed a voice it does not have falls back to its own default.
+            await _tts.WarmUpVoiceAsync(item.Voice).ConfigureAwait(false);
+            prepared = true;
+          }
+          catch (Exception ex)
+          {
+            // A voice that will not warm is not worth reporting: the trigger that follows synthesizes normally, just
+            // without the head start.
+            Log.Debug($"Unable to warm up the {item.Voice} voice", ex);
+          }
+          finally
+          {
+            ReleaseSynthGate();
+          }
+
+          break;
+        }
+
+        /*
+         * Only a voice that actually got through counts as prepared. Recording one that gave up would suppress the
+         * next attempt at it, and that is how a busy moment leaves a player cold for the rest of the evening.
+         */
+        if (prepared)
+        {
+          lock (_warmLock)
+          {
+            _warmedVoice = item.Key;
+          }
+        }
+      }
+    }
+
+    /* Nothing the previous engine had prepared counts for the next one; it warms on its own terms. */
+    private void ResetWarmUpState()
+    {
+      lock (_warmLock)
+      {
+        _warmQueue.Clear();
+        _warmQueued.Clear();
+        _warmedVoice = null;
+      }
     }
 
     public void StartAudio(string id)
@@ -224,8 +694,6 @@ namespace EQLogParser.Audio
     {
       if (!string.IsNullOrEmpty(id) && _playerAudios.TryGetValue(id, out var playerAudio))
       {
-        SpeechSynthesizer cleanupSynth = null;
-        System.Speech.Synthesis.SpeechSynthesizer cleanupSapi = null;
         CancellationTokenSource cts = null;
 
         lock (playerAudio)
@@ -238,29 +706,20 @@ namespace EQLogParser.Audio
           {
             cts = playerAudio.ProcessingToken;
             _playerAudios.TryRemove(id, out _);
+          }
+        }
 
-            try
-            {
-              if (_usePiper)
-              {
-                PiperTts.RemoveVoice(id);
-              }
-              else
-              {
-                if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240))
-                {
-                  cleanupSynth = playerAudio.Synth;
-                  playerAudio.Synth = null;
-                }
+        if (remove)
+        {
+          _requestedVoices.TryRemove(id, out _);
 
-                cleanupSapi = playerAudio.SapiSynth;
-                playerAudio.SapiSynth = null;
-              }
-            }
-            catch (Exception)
-            {
-              // ignore
-            }
+          // whatever the engine held for this player is the engine's to release, outside this lock but not around a
+          // swap: see BindVoice for why engine state is only ever touched under _engineLock
+          var engine = _tts;
+
+          lock (_engineLock)
+          {
+            engine.RemoveVoice(id);
           }
         }
 
@@ -272,42 +731,51 @@ namespace EQLogParser.Audio
         {
           // ignore
         }
+      }
+    }
 
-        // dispose outside of locking
-        try
+    public void TestSpeakFileAsync(string filePath, int adjustedVolume = 4) =>
+      _ = TestSpeakFileCoreAsync(filePath, adjustedVolume);
+
+    private async Task TestSpeakFileCoreAsync(string filePath, int adjustedVolume)
+    {
+      try
+      {
+        if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
         {
-          if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240) && cleanupSynth != null)
+          return;
+        }
+
+        await using var reader = new AudioFileReader(filePath);
+        if (await ReadFileToByteArrayAsync(reader).ConfigureAwait(false) is { Length: > 0 } data)
+        {
+          var volume = ConvertVolume(_appVolume, adjustedVolume);
+          if (!PlayAudioData(data, reader.WaveFormat, GetDevice(), volume, 0))
           {
-            cleanupSynth?.Dispose();
+            ShowAudioError();
           }
-
-          cleanupSapi?.Dispose();
         }
-        catch (Exception)
-        {
-          // ignore
-        }
+      }
+      catch (Exception ex)
+      {
+        Log.Debug($"Error while previewing file: {filePath}", ex);
       }
     }
 
-    public async void TestSpeakFileAsync(string filePath, int adjustedVolume = 4)
-    {
-      await using var reader = new AudioFileReader(filePath);
-      if (!string.IsNullOrEmpty(filePath) && await ReadFileToByteArrayAsync(reader) is { Length: > 0 } data)
-      {
-        var volume = ConvertVolume(_appVolume, adjustedVolume);
-        if (!PlayAudioData(data, reader.WaveFormat, GetDevice(), volume, 0))
-        {
-          ShowAudioError();
-        }
-      }
-    }
+    public void TestSpeakTtsAsync(string tts, string voice = null, int rate = 0, int playerVolume = -1,
+      int adjustedVolume = 4) =>
+      _ = TestSpeakTtsCoreAsync(tts, voice, rate, playerVolume, adjustedVolume);
 
-    public async void TestSpeakTtsAsync(string tts, string voice = null, int rate = 0, int playerVolume = -1, int adjustedVolume = 4)
+    private async Task TestSpeakTtsCoreAsync(string tts, string voice, int rate, int playerVolume, int adjustedVolume)
     {
-      if (!string.IsNullOrEmpty(tts))
+      if (string.IsNullOrEmpty(tts))
       {
-        (var audio, var sample) = await SynthesizeTextAsync(voice, tts);
+        return;
+      }
+
+      try
+      {
+        (var audio, var sample) = await SynthesizeVoiceCachedAsync(voice, tts).ConfigureAwait(false);
 
         if (audio?.Length > 0)
         {
@@ -319,14 +787,27 @@ namespace EQLogParser.Audio
             ShowAudioError();
           }
         }
+        else
+        {
+          LogSilentPreview(voice, tts);
+        }
+      }
+      catch (Exception ex)
+      {
+        Log.Debug("Error synthesizing text.", ex);
       }
     }
 
-    public async void SpeakOrSaveTtsAsync(string tts, string voice, string id, float specificVolume, int rate, string fileName = null)
+    public void SpeakOrSaveTtsAsync(string tts, string voice, string id, float specificVolume, int rate,
+      string fileName = null) =>
+      _ = SpeakOrSaveTtsCoreAsync(tts, voice, id, specificVolume, rate, fileName);
+
+    private async Task SpeakOrSaveTtsCoreAsync(string tts, string voice, string id, float specificVolume, int rate,
+      string fileName)
     {
       if (!string.IsNullOrEmpty(tts))
       {
-        (var audio, var sample) = await SynthesizeTextAsync(voice, tts);
+        (var audio, var sample) = await SynthesizeVoiceCachedAsync(voice, tts).ConfigureAwait(false);
 
         if (audio?.Length > 0)
         {
@@ -340,7 +821,7 @@ namespace EQLogParser.Audio
               ShowAudioError();
             }
           }
-          else
+          else if (fileName is not null)
           {
             WaveFileWriter writer = null;
             RawSourceWaveStream stream = null;
@@ -383,11 +864,19 @@ namespace EQLogParser.Audio
               }
             }
           }
+          else
+          {
+            LogSilentPreview(voice, tts);
+          }
         }
       }
     }
 
-    public async void SpeakFileAsync(string id, string filePath, long priority, int playerVolume, int adjustedVolume = 4)
+    public void SpeakFileAsync(string id, string filePath, long priority, int playerVolume, int adjustedVolume = 4) =>
+      _ = SpeakFileCoreAsync(id, filePath, priority, playerVolume, adjustedVolume);
+
+    private async Task SpeakFileCoreAsync(string id, string filePath, long priority, int playerVolume,
+      int adjustedVolume)
     {
       if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(filePath) && File.Exists(filePath) && _cache != null)
       {
@@ -424,52 +913,25 @@ namespace EQLogParser.Audio
       }
     }
 
-    public async void SpeakTtsAsync(string id, string tts, long priority, int rate, int playerVolume, int adjustedVolume)
+    /*
+     * The public entry points hand the work to the thread pool and return. Callers (the trigger processor and several
+     * buttons) fire and forget, so nothing here may resume on the caller's context: a neural synthesis costs a few
+     * hundred milliseconds and it used to run on the UI thread, freezing the window mid callout.
+     */
+    public void SpeakTtsAsync(string id, string tts, long priority, int rate, int playerVolume, int adjustedVolume) =>
+      _ = SpeakTtsCoreAsync(id, tts, priority, rate, playerVolume, adjustedVolume);
+
+    private async Task SpeakTtsCoreAsync(string id, string tts, long priority, int rate, int playerVolume,
+      int adjustedVolume)
     {
-      if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(tts))
+      if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(tts) || !_playerAudios.ContainsKey(id))
       {
-        byte[] audio = null;
-        var sample = 0;
-        await _semaphore.WaitAsync();
+        return;
+      }
 
-        try
-        {
-          if (_playerAudios.TryGetValue(id, out var playerAudio))
-          {
-            if (_usePiper)
-            {
-              audio = PiperTts.SynthesizeText(id, tts);
-              sample = playerAudio.PiperSampleRate;
-            }
-            else
-            {
-              SpeechSynthesizer synth = null;
-              System.Speech.Synthesis.SpeechSynthesizer sapiSynth = null;
-              lock (playerAudio)
-              {
-                synth = playerAudio.Synth;
-                sapiSynth = playerAudio.SapiSynth;
-              }
-
-              if (synth != null)
-              {
-                (audio, sample) = await SynthesizeTextToByteArrayAsync(tts, synth);
-              }
-              else if (sapiSynth != null)
-              {
-                (audio, sample) = await SynthesizeTextToByteArrayAsync(tts, sapiSynth);
-              }
-            }
-          }
-        }
-        catch (Exception ex)
-        {
-          Log.Debug("Error synthesizing text.", ex);
-        }
-        finally
-        {
-          _semaphore.Release();
-        }
+      try
+      {
+        (var audio, var sample) = await SynthesizeForPlayerCachedAsync(id, tts).ConfigureAwait(false);
 
         if (audio is { Length: > 0 })
         {
@@ -477,6 +939,125 @@ namespace EQLogParser.Audio
           SpeakAsync(id, audio, waveFormat, rate, priority, playerVolume, adjustedVolume);
         }
       }
+      catch (Exception ex)
+      {
+        Log.Debug("Error synthesizing text.", ex);
+      }
+    }
+
+    // Speaks for a registered player; that player's voice resolves against the engine doing the speaking.
+    private Task<(byte[] pcm, int sampleRate)> SynthesizeForPlayerCachedAsync(string playerId, string text) =>
+      SynthesizeCachedAsync(playerId, null, text, (engine, voice) => engine.SynthesizeForPlayerAsync(playerId, text));
+
+    // Preview and WAV export speak voices no player owns.
+    private Task<(byte[] pcm, int sampleRate)> SynthesizeVoiceCachedAsync(string voice, string text) =>
+      SynthesizeCachedAsync(null, voice, text, (engine, name) => engine.SynthesizeVoiceAsync(name, text));
+
+    /*
+     * Trigger callouts come from a small set of sentences and speech does not change for a given engine, voice and
+     * text, so the PCM is cached: only fresh text pays for inference, which matters most for Kokoro. The text is
+     * hashed so a long custom callout cannot produce an unbounded cache key.
+     *
+     * A phrase that is already cached needs no gate and no engine at all: cached bytes belong to an engine, a voice
+     * and a piece of text rather than to whichever engine happens to be speaking, so the first lookup below settles
+     * itself against the cache alone. That is what keeps twenty familiar callouts from queueing behind one new
+     * sentence being synthesized. Everything that can miss runs under the gate, where the engine cannot be swapped out
+     * underneath it - SwitchEngineAsync takes an engine out under this same gate - so voice, key and result are all
+     * resolved against one engine.
+     */
+    private async Task<(byte[] pcm, int sampleRate)> SynthesizeCachedAsync(string playerId, string voice, string text,
+      Func<ITtsEngine, string, Task<(byte[] pcm, int sampleRate)>> synthesize)
+    {
+      var probedEngine = _tts;
+      var probedVoice = _cache is null ? null : RequestedVoice(probedEngine, playerId, voice);
+      var probe = _cache is null ? null : BuildCacheKey(probedEngine.Name, probedVoice, text);
+
+      if (probe is not null && TryGetCached(probe, out var cachedPcm, out var cachedRate))
+      {
+        return (cachedPcm, cachedRate);
+      }
+
+      await _synthGate.WaitAsync().ConfigureAwait(false);
+
+      try
+      {
+        // Resolved again: this waited, and the engine may have changed while it did. When nothing it depends on moved,
+        // the key built above is the same one, and a second digest of the same phrase buys nothing.
+        var engine = _tts;
+        var spokenVoice = RequestedVoice(engine, playerId, voice);
+        var key = probe is not null && ReferenceEquals(engine, probedEngine) && spokenVoice == probedVoice
+          ? probe
+          : _cache is null ? null : BuildCacheKey(engine.Name, spokenVoice, text);
+
+        if (key is not null && TryGetCached(key, out cachedPcm, out cachedRate))
+        {
+          return (cachedPcm, cachedRate);
+        }
+
+        var (pcm, sampleRate) = await synthesize(engine, spokenVoice).ConfigureAwait(false);
+
+        if (pcm is { Length: > 0 } && sampleRate <= 0)
+        {
+          // Nothing downstream can play this and it must not be remembered as audio: a WaveFormat of zero hertz turns
+          // into an exception at the audio device, far from the engine that produced it.
+          Log.Debug($"{engine.Name} returned speech with no sample rate; dropped.");
+          return (null, 0);
+        }
+
+        if (key is not null && pcm is { Length: > 0 })
+        {
+          var options = new MemoryCacheEntryOptions().SetSlidingExpiration(TimeSpan.FromMinutes(60));
+          options.SetSize(pcm.Length);
+          _cache.Set(key, new CachedAudio
+          {
+            Data = pcm,
+            WaveFormat = new WaveFormat(sampleRate, 16, 1)
+          }, options);
+        }
+
+        return (pcm, sampleRate);
+      }
+      finally
+      {
+        ReleaseSynthGate();
+      }
+    }
+
+    /*
+     * The voice this request speaks with: whatever the player is bound to for a player, and the name that was asked
+     * for - which no player owns - for a preview or a WAV export.
+     */
+    private string RequestedVoice(ITtsEngine engine, string playerId, string voice) =>
+      playerId is not null ? SpokenVoice(engine, playerId) : voice;
+
+    /*
+     * PCM belongs to one engine speaking one voice, so nothing cached under one name is ever played by another.
+     *
+     * The digest runs over the string's own UTF-16 bytes rather than a UTF-8 copy: this key never leaves the process,
+     * so all it has to be is stable for as long as the cache lives, and skipping the encoding pass keeps an allocation
+     * per callout out of a zone-in with twenty players talking at once.
+     */
+    private static string BuildCacheKey(string engine, string voice, string text)
+    {
+      var phrase = Convert.ToHexString(SHA256.HashData(MemoryMarshal.AsBytes(text.AsSpan())));
+      return $"{AudioCacheKey}tts:{engine}:{voice}:{phrase}";
+    }
+
+    /* Only audio that could actually be played counts as a hit. */
+    private static bool TryGetCached(string key, out byte[] pcm, out int sampleRate)
+    {
+      pcm = null;
+      sampleRate = 0;
+
+      if (_cache.TryGetValue(key, out var entry) &&
+          entry is CachedAudio { Data.Length: > 0 } cached && cached.WaveFormat is { SampleRate: > 0 } format)
+      {
+        pcm = cached.Data;
+        sampleRate = format.SampleRate;
+        return true;
+      }
+
+      return false;
     }
 
     public static (List<string> idList, List<string> nameList) GetDeviceList()
@@ -617,6 +1198,17 @@ namespace EQLogParser.Audio
       }
     }
 
+    /*
+     * Somebody asked to hear a voice and got nothing at all. From the outside that is indistinguishable from a dead
+     * audio device - which is what makes it worth a line without Debug turned on - so name the engine and the voice
+     * that came back empty; the engine itself logs whatever it knows about its side of the failure.
+     */
+    private void LogSilentPreview(string voice, string tts) =>
+      Log.Warn($"Nothing came back from the {_tts?.Name ?? "TTS"} voice '{voice}' ({Shorten(tts)}).");
+
+    /* Previews speak text people typed, and the log has no business carrying all of it. */
+    private static string Shorten(string text) => text.Length <= 40 ? text : text[..40] + "...";
+
     private static bool PlayAudioData(byte[] data, WaveFormat waveFormat, Guid device, float volume, int rate = 0)
     {
       RawSourceWaveStream stream = null;
@@ -679,41 +1271,6 @@ namespace EQLogParser.Audio
       }
 
       return null;
-    }
-
-    // load voice. note not synchronized
-    private void LoadVoice(string id, string voice, PlayerAudio playerAudio)
-    {
-      if (_usePiper)
-      {
-        if (PiperTts.LoadVoice(id, voice, out var piperVoice))
-        {
-          playerAudio.PiperSampleRate = piperVoice.Sample;
-        }
-      }
-      else
-      {
-        if (IsLegacyVoice(voice))
-        {
-          playerAudio.SapiSynth?.Dispose();
-          playerAudio.SapiSynth = CreateSapiSpeechSynthesizer(voice);
-          if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240))
-          {
-            playerAudio.Synth?.Dispose();
-            playerAudio.Synth = null;
-          }
-        }
-        else
-        {
-          if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240))
-          {
-            playerAudio.Synth?.Dispose();
-            playerAudio.Synth = CreateSpeechSynthesizer(voice);
-            playerAudio.SapiSynth?.Dispose();
-            playerAudio.SapiSynth = null;
-          }
-        }
-      }
     }
 
     private async Task ProcessAsync(PlayerAudio playerAudio, CancellationTokenSource cancellationTokenSource)
@@ -923,83 +1480,6 @@ namespace EQLogParser.Audio
       }, cancellationTokenSource.Token);
     }
 
-    private async Task<(byte[], int)> SynthesizeTextAsync(string voice, string tts)
-    {
-      byte[] audio = null;
-      var sample = 0;
-
-      if (_usePiper)
-      {
-        const string testSpeaker = "testSpeaker";
-        if (PiperTts.LoadVoice(testSpeaker, voice, out var voiceData))
-        {
-          audio = PiperTts.SynthesizeText(testSpeaker, tts);
-          sample = voiceData.Sample;
-          PiperTts.RemoveVoice(testSpeaker);
-        }
-      }
-      else
-      {
-        if (IsLegacyVoice(voice))
-        {
-          if (CreateSapiSpeechSynthesizer(voice) is { } synth)
-          {
-            (audio, sample) = await SynthesizeTextToByteArrayAsync(tts, synth);
-            synth.Dispose();
-          }
-        }
-        else
-        {
-          if (CreateSpeechSynthesizer(voice) is { } synth)
-          {
-            (audio, sample) = await SynthesizeTextToByteArrayAsync(tts, synth);
-            if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240)) synth.Dispose();
-          }
-        }
-      }
-
-      return (audio, sample);
-    }
-
-    private SpeechSynthesizer CreateSpeechSynthesizer(string voice)
-    {
-      SpeechSynthesizer synth = null;
-
-      try
-      {
-        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240))
-        {
-          synth = new SpeechSynthesizer();
-          if (GetVoiceInfo(voice) is { } voiceInfo)
-          {
-            synth.Voice = voiceInfo;
-          }
-        }
-      }
-      catch (Exception)
-      {
-        // not supported
-      }
-
-      return synth;
-    }
-
-    private VoiceInformation GetVoiceInfo(string name)
-    {
-      if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240) || _validVoices.Count == 0) return null;
-      if (name == null) return _validVoices[0];
-
-      foreach (var voice in _validVoices)
-      {
-        if (voice.DisplayName == name || name.StartsWith(voice.DisplayName, StringComparison.OrdinalIgnoreCase))
-        {
-          return voice;
-        }
-      }
-
-      return _validVoices[0];
-    }
-
     private bool IsRenderDevice(string deviceId)
     {
       if (_isRenderDevice.TryGetValue(deviceId, out var render))
@@ -1030,29 +1510,6 @@ namespace EQLogParser.Audio
       {
         return _selectedDeviceGuid;
       }
-    }
-
-    private static System.Speech.Synthesis.SpeechSynthesizer CreateSapiSpeechSynthesizer(string voice)
-    {
-      System.Speech.Synthesis.SpeechSynthesizer synth = null;
-
-      try
-      {
-        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240))
-        {
-          synth = new System.Speech.Synthesis.SpeechSynthesizer();
-          if (GetSapiVoiceInfo(voice) is { } voiceInfo)
-          {
-            synth.SelectVoice(voiceInfo.Name);
-          }
-        }
-      }
-      catch (Exception)
-      {
-        // not supported
-      }
-
-      return synth;
     }
 
     private static DirectSoundOut CreateDirectSoundOut(Guid device, float volume, RawSourceWaveStream stream, int rate)
@@ -1099,37 +1556,6 @@ namespace EQLogParser.Audio
       return foundGuid;
     }
 
-    private static System.Speech.Synthesis.VoiceInfo GetSapiVoiceInfo(string name)
-    {
-      System.Speech.Synthesis.VoiceInfo voiceInfo = null;
-
-      try
-      {
-        using var synth = new System.Speech.Synthesis.SpeechSynthesizer();
-        voiceInfo = synth.Voice;
-        if (!string.IsNullOrEmpty(name))
-        {
-          // do not pass null for culture
-#pragma warning disable CA1304 // Specify CultureInfo
-          foreach (var voice in synth.GetInstalledVoices())
-          {
-            if (!string.IsNullOrEmpty(name) && name.Contains(voice.VoiceInfo.Name, StringComparison.OrdinalIgnoreCase))
-            {
-              voiceInfo = voice.VoiceInfo;
-              break;
-            }
-          }
-#pragma warning restore CA1304 // Specify CultureInfo
-        }
-      }
-      catch (Exception)
-      {
-        // not supported
-      }
-
-      return voiceInfo;
-    }
-
     private static async Task<byte[]> ReadFileToByteArrayAsync(AudioFileReader reader)
     {
       try
@@ -1143,70 +1569,6 @@ namespace EQLogParser.Audio
         Log.Debug($"Error reading file to byte array: {reader.FileName}", ex);
         return null;
       }
-    }
-
-    private static async Task<(byte[], int)> SynthesizeTextToByteArrayAsync(string tts, SpeechSynthesizer synth)
-    {
-      if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240))
-      {
-        return (null, 0);
-      }
-
-      SpeechSynthesisStream stream = null;
-
-      try
-      {
-        stream = await synth.SynthesizeTextToStreamAsync(tts);
-        using var reader = new WaveFileReader(stream.AsStream());
-        return await ReadPcmAsync(reader);
-      }
-      catch (Exception ex)
-      {
-        Log.Debug("Error synthesizing text to byte array.", ex);
-      }
-      finally
-      {
-        try
-        {
-          stream?.Dispose();
-        }
-        catch (Exception)
-        {
-          // ignore dispose errors
-        }
-      }
-
-      return (null, 0);
-    }
-
-    private static async Task<(byte[], int)> SynthesizeTextToByteArrayAsync(string tts, System.Speech.Synthesis.SpeechSynthesizer synth)
-    {
-      try
-      {
-        using var mem = new MemoryStream();
-        synth.SetOutputToWaveStream(mem);
-        synth.Speak(tts);
-        synth.SetOutputToNull(); // release reference to mem
-        mem.Position = 0;
-        using var reader = new WaveFileReader(mem);
-        return await ReadPcmAsync(reader);
-      }
-      catch (Exception ex)
-      {
-        Log.Debug("Error synthesizing text to byte array.", ex);
-      }
-
-      return (null, 0);
-    }
-
-    private static async Task<(byte[], int)> ReadPcmAsync(WaveFileReader reader)
-    {
-      using var pcm = WaveFormatConversionStream.CreatePcmStream(reader);
-      using var ms = pcm.Length > 0 ? new MemoryStream((int)pcm.Length) : new MemoryStream();
-      await pcm.CopyToAsync(ms);
-      var data = ms.ToArray();
-      var sample = pcm.WaveFormat.SampleRate;
-      return (data, sample);
     }
 
     private static async Task CleanupHelperAsync(DirectSoundOut output, Stream stream, MemoryStream stream2 = null)
@@ -1271,39 +1633,6 @@ namespace EQLogParser.Audio
       return current * floatIncrease;
     }
 
-    private static bool IsLegacyVoice(string voice)
-    {
-      return !string.IsNullOrEmpty(voice) && voice.StartsWith("(Legacy) ", StringComparison.OrdinalIgnoreCase);
-    }
-
-    [DebuggerNonUserCode]
-    private static async Task<bool> IsVoicePlayableAsync(SpeechSynthesizer synth, VoiceInformation voice)
-    {
-      if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 10240))
-      {
-        return false;
-      }
-
-      try
-      {
-        synth.Voice = voice;
-        using IRandomAccessStream stream = await synth.SynthesizeTextToStreamAsync("test");
-        return true;
-      }
-      catch (FileNotFoundException)
-      {
-        return false;
-      }
-      catch (COMException)
-      {
-        return false;
-      }
-      catch (InvalidOperationException)
-      {
-        return false;
-      }
-    }
-
     public void Dispose()
     {
       Dispose(true);
@@ -1312,18 +1641,17 @@ namespace EQLogParser.Audio
 
     protected virtual void Dispose(bool disposing)
     {
-      if (_disposed) return;
+      if (_disposed)
+      {
+        return;
+      }
 
       if (disposing)
       {
-        _semaphore?.Dispose();
+        _synthGate?.Dispose();
         _deviceEnumerator?.UnregisterEndpointNotificationCallback(_notificationClient);
         _deviceEnumerator?.Dispose();
-
-        if (_usePiper)
-        {
-          PiperTts.Release();
-        }
+        _tts?.Dispose();
       }
 
       _disposed = true;
@@ -1336,14 +1664,12 @@ namespace EQLogParser.Audio
       internal double Seconds { get; init; }
     }
 
+    // queue state only; whatever a speech engine holds for a player lives with the engine
     private sealed class PlayerAudio
     {
       internal List<PlaybackEvent> Events { get; set; } = [];
       internal PlaybackEvent CurrentEvent { get; set; }
       internal CancellationTokenSource ProcessingToken { get; set; }
-      internal SpeechSynthesizer Synth { get; set; }
-      internal System.Speech.Synthesis.SpeechSynthesizer SapiSynth { get; set; }
-      internal int PiperSampleRate { get; set; }
       internal bool PlayerRequestStop { get; set; }
     }
 
