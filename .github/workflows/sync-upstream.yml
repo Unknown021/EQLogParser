@@ -352,19 +352,45 @@ jobs:
           # lightweight one - relying on it silently leaves the tag local-only.
           git push origin "refs/tags/$NEW_VERSION"
 
-          # Idempotency: if a prior run got this far and only failed on a later step (or on
-          # this same gh call due to a transient API error), the tag/commit above are safe to
-          # redo (both are no-ops against matching existing state), but re-running `gh release
-          # create` against an existing release would hard-fail. Skip it in that case instead.
-          # Use the REST endpoint directly (gh api) rather than `gh release view`: the latter
-          # returned a false "found" once immediately after the tag push (observed on the
-          # 2.3.61 run - `gh api .../releases/tags/...` moments later correctly 404'd), a bug
-          # class we've already worked around elsewhere in this file (see the createIssue note
-          # above) by preferring the plain REST call over the friendlier CLI wrapper.
-          if gh api "repos/${{ github.repository }}/releases/tags/$NEW_VERSION" >/dev/null 2>&1; then
-            echo "Release $NEW_VERSION already exists - skipping creation."
-          else
-            gh release create "$NEW_VERSION" "Release/EQLogParser-install-$NEW_VERSION.exe" \
-              --title "$NEW_VERSION" \
-              --notes "Automated sync of upstream kauffman12/EQLogParser release $NEW_VERSION."
+          # Idempotency: if a prior run got this far and only failed on a later step, the
+          # tag/commit above are safe to redo (both are no-ops against matching existing state),
+          # but re-running `gh release create` against an existing release would hard-fail.
+          #
+          # This used to pre-check existence via `gh api .../releases/tags/...` and only call
+          # `gh release create` when that came back 404. That check-then-act pattern is
+          # inherently racy against GitHub's read-after-write lag right after a tag push, and it
+          # has now been observed to fail in both directions: `gh release view` once reported a
+          # false "found" for a release that didn't exist yet (2.3.61 run), and `gh release
+          # create` itself once reported a phantom "already exists" for a release that, per
+          # `gh api .../releases/tags/...`, genuinely did not exist even minutes later (2.3.63
+          # run - had to be created manually after the fact).
+          #
+          # So: just attempt the create, and treat "already exists" from that attempt as the
+          # source of truth to react to - polling the tags endpoint a few times before deciding
+          # whether to trust it, since that endpoint has its own lag. Anything else is a real
+          # failure.
+          create_output=""
+          if ! create_output=$(gh release create "$NEW_VERSION" "Release/EQLogParser-install-$NEW_VERSION.exe" \
+            --title "$NEW_VERSION" \
+            --notes "Automated sync of upstream kauffman12/EQLogParser release $NEW_VERSION." 2>&1); then
+            echo "$create_output"
+            if ! echo "$create_output" | grep -qi "already exists"; then
+              exit 1
+            fi
+
+            found="false"
+            for _ in 1 2 3 4 5; do
+              sleep 5
+              if gh api "repos/${{ github.repository }}/releases/tags/$NEW_VERSION" >/dev/null 2>&1; then
+                found="true"
+                break
+              fi
+            done
+
+            if [ "$found" == "true" ]; then
+              echo "Release $NEW_VERSION confirmed to exist after polling - treating as already published."
+            else
+              echo "gh release create reported release $NEW_VERSION already exists, but it still can't be found after polling. Not silently leaving tag $NEW_VERSION without a release - failing instead."
+              exit 1
+            fi
           fi
