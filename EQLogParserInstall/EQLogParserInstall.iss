@@ -2,19 +2,19 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "EQLogParser"
-#define MyAppVersion "2.3.63"
+#define MyAppVersion "2.4.0"
 #define MyAppPublisher "Unknown021"
 #define MyAppURL "https://github.com/Unknown021/EQLogParser"
 #define MyAppExeName "EQLogParser.exe"
 #ifndef MyReleaseDir
-  #define MyReleaseDir "C:\Dev\EQLogParser\EQLogParser\bin\Release\net8.0-windows10.0.17763.0"
+  #define MyReleaseDir "C:\Dev\EQLogParser\EQLogParser\bin\Release\net10.0-windows10.0.17763.0"
 #endif
 
 #ifndef MySrcDir
   #define MySrcDir "C:\Dev\EQLogParser\EQLogParser"
 #endif
 #ifndef BackupUtilDir
-  #define BackupUtilDir "C:\Dev\EQLogParser\BackupUtil\bin\Release\net8.0-windows10.0.17763.0"
+  #define BackupUtilDir "C:\Dev\EQLogParser\BackupUtil\bin\Release\net10.0-windows10.0.17763.0"
 #endif
 
 [Setup]
@@ -81,6 +81,11 @@ Source: "{#MyReleaseDir}\Microsoft.WindowsAPICodePack.Shell.dll"; DestDir: "{app
 Source: "{#MyReleaseDir}\Microsoft.Windows.SDK.NET.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Riok.Mapperly.Abstractions.dll"; DestDir: "{app}"; Flags: ignoreversion
 
+; Floating combat text (FctSkiaCanvas) renders through SkiaSharp. Both halves are required: the managed
+; assembly resolves normally, its native library is imported by name at first use and loads through the
+; deps.json probing below.
+Source: "{#MyReleaseDir}\SkiaSharp.dll"; DestDir: "{app}"; Flags: ignoreversion
+
 ; .NET Memory Caching and Dependency Injection
 Source: "{#MyReleaseDir}\Microsoft.Extensions.Caching.Abstractions.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Microsoft.Extensions.Caching.Memory.dll"; DestDir: "{app}"; Flags: ignoreversion
@@ -89,7 +94,6 @@ Source: "{#MyReleaseDir}\Microsoft.Extensions.Logging.Abstractions.dll"; DestDir
 Source: "{#MyReleaseDir}\Microsoft.Extensions.ObjectPool.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Microsoft.Extensions.Options.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Microsoft.Extensions.Primitives.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MyReleaseDir}\System.Diagnostics.DiagnosticSource.dll"; DestDir: "{app}"; Flags: ignoreversion
 
 Source: "{#MyReleaseDir}\NAudio.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\NAudio.Core.dll"; DestDir: "{app}"; Flags: ignoreversion
@@ -113,6 +117,8 @@ Source: "{#MyReleaseDir}\Syncfusion.GridCommon.WPF.dll"; DestDir: "{app}"; Flags
 Source: "{#MyReleaseDir}\Syncfusion.Licensing.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Syncfusion.OfficeChart.Base.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Syncfusion.PropertyGrid.WPF.dll"; DestDir: "{app}"; Flags: ignoreversion
+; Setup panels (FCT and damage meter) fold their sections with SfAccordion.
+Source: "{#MyReleaseDir}\Syncfusion.SfAccordion.WPF.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Syncfusion.SfBusyIndicator.WPF.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Syncfusion.SfChart.WPF.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Syncfusion.SfGrid.WPF.dll"; DestDir: "{app}"; Flags: ignoreversion
@@ -122,17 +128,16 @@ Source: "{#MyReleaseDir}\Syncfusion.SfProgressBar.WPF.dll"; DestDir: "{app}"; Fl
 Source: "{#MyReleaseDir}\Syncfusion.SfSkinManager.WPF.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Syncfusion.SfTreeView.WPF.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Syncfusion.Shared.WPF.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#MyReleaseDir}\Syncfusion.Telemetry.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Syncfusion.Themes.MaterialDark.WPF.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Syncfusion.Themes.MaterialDarkCustom.WPF.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Syncfusion.Themes.MaterialLight.WPF.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MyReleaseDir}\Syncfusion.Tools.WPF.Classic.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Syncfusion.Tools.WPF.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MyReleaseDir}\System.Private.ServiceModel.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\System.ServiceModel.Primitives.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MyReleaseDir}\System.Drawing.Common.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\WinRT.Runtime.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\WpfAnimatedGif.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MyReleaseDir}\runtimes\win\lib\net8.0\System.Speech.dll"; DestDir: "{app}\runtimes\win\lib\net8.0"; Flags: ignoreversion
+Source: "{#MyReleaseDir}\runtimes\win\lib\net10.0\System.Speech.dll"; DestDir: "{app}\runtimes\win\lib\net10.0"; Flags: ignoreversion
+Source: "{#MyReleaseDir}\runtimes\win-x64\native\libSkiaSharp.dll"; DestDir: "{app}\runtimes\win-x64\native"; Flags: ignoreversion
 
 ; The MSVC runtime that onnxruntime.dll imports, installed app-local (flat in {app}, not in a redist folder) so a
 ; machine without the Visual C++ 2022 redistributable can still speak. Being beside the executable is what puts them
@@ -163,7 +168,13 @@ Type: files; Name: "{app}\LiveCharts.dll"
 Type: files; Name: "{app}\LiveCharts.Wpf.dll"
 Type: files; Name: "{app}\NumericUpDownLib.dll"
 Type: files; Name: "{app}\Syncfusion.SfRichTextBoxAdv.WPF.dll"
+Type: files; Name: "{app}\System.Diagnostics.DiagnosticSource.dll"
+Type: files; Name: "{app}\System.Private.ServiceModel.dll"
+Type: files; Name: "{app}\System.Drawing.Common.dll"
+Type: files; Name: "{app}\Syncfusion.Tools.WPF.Classic.dll"
+Type: files; Name: "{app}\Syncfusion.Shared.WPF.Classic.dll"
 Type: files; Name: "{app}\WPFTextBoxAutoComplete.dll"
+Type: files; Name: "{app}\runtimes\win\lib\net8.0\System.Speech.dll"
 Type: files; Name: "{app}\data\releasenotes.pdf"
 Type: files; Name: "{app}\data\triggerVariables.pdf"
 Type: files; Name: "{app}\data\triggerVariables.rtf"
@@ -174,8 +185,12 @@ Type: files; Name: "{app}\data\triggerVariables.rtf"
 ; folder, and deleting someone's models on upgrade is worse than leaving a few hundred MB of dead weight for them to move
 ; by hand. The uninstaller still clears {app}.
 ;
-; {app}\runtimes\win-x64 is left alone for the same reason: other packages put natives in it (SQLite among them), this
-; installer does not create the folder, and nothing here can say what an older install left inside it.
+; {app}\runtimes\win-x64 is left alone for the same reason: other packages put natives in it (SQLite among them) and
+; nothing here can say what an older install left inside it. SkiaSharp's native library installs under it, so the
+; folder itself now exists on a fresh install -- but only the one file this script copied is ever removed.
+;
+; The downloaded packs are a different case and are removed on uninstall -- see CurUninstallStepChanged: nothing under
+; %LOCALAPPDATA%\EQLogParser is user-authored, it all comes back from GitHub on the next enable.
 
 [Code]
 // Delete old logs
@@ -214,7 +229,7 @@ procedure LabelLinkClick(Sender: TObject);
 var
   ErrorCode: Integer;
 begin
-  ShellExec('open', 'https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-desktop-8.0.30-windows-x64-installer', '', '', SW_SHOW, ewNoWait, ErrorCode);
+  ShellExec('open', 'https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-desktop-10.0.12-windows-x64-installer', '', '', SW_SHOW, ewNoWait, ErrorCode);
 end;
 
 function ShowDotNetDownloadPage: Boolean;
@@ -233,7 +248,7 @@ begin
   // Create an informational label
   InfoLabel := TLabel.Create(Form);
   InfoLabel.Parent := Form;
-  InfoLabel.Caption := 'EQLogParser requires .NET 8.0 x64 Desktop Runtime. Please install ' + #13#10 +
+  InfoLabel.Caption := 'EQLogParser requires .NET 10.0 x64 Desktop Runtime. Please install ' + #13#10 +
   'before continuing. A recent version can be found here:';
   InfoLabel.Font.Size := 9;
   InfoLabel.Top := ScaleY(10);
@@ -244,7 +259,7 @@ begin
   // Create a clickable label for the link
   LabelLink := TMemo.Create(Form);
   LabelLink.Parent := Form;
-  LabelLink.Text := 'https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-desktop-8.0.30-windows-x64-installer';
+  LabelLink.Text := 'https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-desktop-10.0.12-windows-x64-installer';
   LabelLink.Font.Style := [fsUnderline];
   LabelLink.Font.Color := clBlue;
   LabelLink.Font.Size := 8;
@@ -323,10 +338,10 @@ begin
   Patch := StrToIntDef(PatchStr, 0);
 
   // Check version validity
-  if (Major = 8) and (Minor > 0) then
+  if (Major = 10) and (Minor > 0) then
     Result := True;
 
-  if (Major = 8) and (Minor = 0) and (Patch >= 11) then
+  if (Major = 10) and (Minor = 0) and (Patch >= 0) then
     Result := True;
 end;
 
@@ -364,6 +379,39 @@ begin
   begin
     DeleteLogFiles;
   end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  PacksRoot: string;
+begin
+  // The speech runtime packs are downloaded rather than installed, so Inno knows nothing about them and would leave
+  // roughly a gigabyte behind: piper-tts (~682MB unpacked) and kokoro (~228MB), plus whatever a half-finished fetch left
+  // in _download and the .staging / .retired / *.removing trees an update parked. All of it is derived data that returns
+  // from GitHub the next time somebody enables an engine, so the folder goes whole rather than chasing a list of two
+  // names that rots whenever an engine is added. Roaming stays: logs and settings are small, and they are theirs.
+  if CurUninstallStep <> usPostUninstall then
+  begin
+    Exit;
+  end;
+
+  PacksRoot := ExpandConstant('{localappdata}\EQLogParser');
+
+  // Guarded rather than trusted: this is an unattended recursive delete inside someone's profile, so it refuses to go
+  // anywhere unless the path expanded to exactly the folder it was aiming at.
+  if not DirExists(PacksRoot) or (ExtractFileName(PacksRoot) <> 'EQLogParser') then
+  begin
+    Log('speech packs: nothing to remove at ' + PacksRoot);
+    Exit;
+  end;
+
+  if DelTree(PacksRoot, True, True, False) then
+    Log('removed downloaded speech engines from ' + PacksRoot)
+  else
+    // Usually a voice still playing: EQLogParser keeps onnxruntime.dll mapped out of the pack. Inno's default
+    // CloseApplications asks about the running program first, so this is rare, and what survives is inert -- a partial
+    // pack fails the "is this installed" check like any other and downloads again.
+    Log('could not fully remove ' + PacksRoot + '; something still has files open');
 end;
 
 function InitializeSetup: Boolean;

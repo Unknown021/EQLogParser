@@ -12,7 +12,7 @@ https://github.com/Unknown021/EQLogParser/tree/master/Release
 
 Minimum Requirements:
 1. Windows 10 x64
-2. .Net 8.0.30 Desktop Runtime for x64 (or newer version of 8.0)
+2. .Net 10.0 Desktop Runtime for x64 (any 10.0.x release)
 
 For More Info Visit:
 http://eqlogparser.kizant.net

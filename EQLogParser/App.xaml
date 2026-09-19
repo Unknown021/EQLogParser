@@ -70,7 +70,7 @@
     </DataTemplate>
 
     <ToolTip x:Key="AdpsHideMineToolTipTemplate">
-      <TextBlock Text="Include spells that only have a message that the player sees.&#x0a;Meaning there is no 'lands on other' message if the spell is cast on someone else. Turning this off makes&#x0a;it easier to compare spell that players have in common."
+      <TextBlock Text="Include spells that only have a message that the player sees.&#x0a;Meaning there is no 'lands on other' message if the spell is cast on someone else. Turning this off makes&#x0a;it easier to compare spell that players have in common"
         FontSize="{DynamicResource EQContentSize}" Foreground="{DynamicResource PrimaryColor}" />
     </ToolTip>
 
@@ -321,23 +321,6 @@
       </StackPanel>
     </ControlTemplate>
 
-    <ControlTemplate x:Key="CustomDamageMeterCheckBoxTemplate" TargetType="CheckBox">
-      <StackPanel Orientation="Horizontal">
-        <CheckBox Margin="0,2,0,0"
-                  FocusVisualStyle="{x:Null}"
-                  IsChecked="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=IsChecked, Mode=TwoWay}"
-                  IsEnabled="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=IsEnabled, Mode=TwoWay}"
-                  Checked="DoNothing" Unchecked="DoNothing"
-                  VerticalContentAlignment="Stretch">
-          <CheckBox.LayoutTransform>
-            <ScaleTransform ScaleX="{DynamicResource EQCheckBoxScale}" ScaleY="{DynamicResource EQCheckBoxScale}"/>
-          </CheckBox.LayoutTransform>
-        </CheckBox>
-        <Label Content="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=Content, Mode=TwoWay}" 
-               VerticalContentAlignment="Center" Foreground="{DynamicResource EQDamageMeterCheckBoxForeground}"/>
-      </StackPanel>
-    </ControlTemplate>
-
     <DataTemplate x:Key="CurrencyTemplate">
       <fa:ImageAwesome x:Name="cellIcon" Height="{DynamicResource EQContentSize}" Width="{DynamicResource EQContentSize}" HorizontalAlignment="Center" Icon="Solid_MoneyBillWave" Foreground="#73b15d" />
     </DataTemplate>
@@ -359,7 +342,7 @@
       <TextBlock FontSize="{DynamicResource EQContentSize}" Foreground="{DynamicResource PrimaryForeground}" Text="6 = Staunch, 7 = Intensity, D = Dragon Glyph, G = Destruction Glyph, M = Mana Burn, L = Life Burn, S = Arcane Secrets" />
     </DataTemplate>
     <DataTemplate x:Key="HeaderBestSecondTemplateToolTip">
-      <TextBlock FontSize="{DynamicResource EQContentSize}" Foreground="{DynamicResource PrimaryForeground}" Text="Max Amount of Damage done in a single Second." />
+      <TextBlock FontSize="{DynamicResource EQContentSize}" Foreground="{DynamicResource PrimaryForeground}" Text="Max Amount of Damage done in a single Second" />
     </DataTemplate>
     <DataTemplate x:Key="HeaderSpellCountsTemplateToolTip">
       <TextBlock FontSize="{DynamicResource EQContentSize}" Foreground="{DynamicResource PrimaryForeground}" Text="Cast Count (# Interrupted)" />

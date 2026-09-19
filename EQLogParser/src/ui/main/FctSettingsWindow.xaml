@@ -1,0 +1,400 @@
+<Window x:Class="EQLogParser.FctSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:syncfusion="http://schemas.syncfusion.com/wpf"
+        xmlns:shared="clr-namespace:Syncfusion.Windows.Shared;assembly=Syncfusion.Shared.WPF"
+        xmlns:NumberFormat="clr-namespace:System.Globalization;assembly=mscorlib"
+        xmlns:local="clr-namespace:EQLogParser"
+        mc:Ignorable="d"
+        Title="Combat Text Settings"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Topmost="True"
+        AllowsTransparency="True"
+        Background="Transparent"
+        SizeToContent="Height"
+        Width="308"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display">
+  <!-- The companion to the FCT overlay: every control lives here so the overlay itself is nothing but numbers while
+       somebody decides what they should look like. It borrows the application's own theme (the merged skin restyles the
+       controls, these two resource keys are the same background and border the main window uses), stays owned by the
+       overlay so it always sits above the game with it and minimises with it, and gets out of the way when configure
+       mode ends. Fixed width, height hugs its content: a property grid is only as tall as the settings it has. -->
+  <Window.Resources>
+    <!-- The same checkbox-in-a-dropdown template the breakdown column pickers and the trigger overlays editor use:
+         closing the dropdown is what commits, which is also when the combo's own title gets rewritten to say how many
+         are on. -->
+    <local:ComboBoxItemTemplateSelector x:Key="CheckSelector" />
+  </Window.Resources>
+  <!-- FontSize comes from the theme like everything else's does (ThemeConfig publishes EQDescriptionSize beside the
+       app's own font scale), so this panel shrinks and grows with the rest of the application. One attribute on the
+       root: font size is an inherited property, and every label, combo, checkbox and button below wants exactly this. -->
+  <Border Background="{DynamicResource ContentBackground}" BorderBrush="{DynamicResource ContentBackgroundAlt3}"
+          BorderThickness="1" CornerRadius="8" Padding="12,10,12,12"
+          TextElement.FontSize="{DynamicResource EQDescriptionSize}">
+    <StackPanel>
+
+      <!-- Title bar: the window has no chrome of Windows' making, so this strip is what grabs to move it. There is no
+           close mark on purpose, and Esc deliberately does nothing: Save and Cancel are labeled buttons at the bottom,
+           and they are the entire exit vocabulary. Leaving this panel is a decision with two visible names — not a key
+           somebody hits while reaching for the mouse. -->
+      <Grid x:Name="headerBar" Background="Transparent" Margin="-4,-2,-4,4" MouseLeftButtonDown="HeaderDrag">
+        <TextBlock Text="FCT Setup" FontWeight="Bold" FontSize="14" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+      </Grid>
+
+      <!-- Three sections, headers in caps so they read as chrome rather than as another row of settings: MAIN is every
+           control that always applies, LAYOUT is where numbers go (the mode-dependent picks), COLORS is the seven hues the
+           player may restage (FctPalette). SfAccordion rather than tabs: the theme draws its header bars and chevron
+           natively, SelectionMode=One keeps exactly one section open like a page would, and the window reads as one panel
+           that breathes taller or shorter instead of two windows stapled together. SelectedIndex=0 opens on main. The
+           footer — demo switch, counters, Save and Cancel — deliberately lives OUTSIDE the accordion: it belongs to the
+           visit, not to one category of decision. -->
+      <syncfusion:SfAccordion Margin="0,4,0,0" SelectionMode="One" SelectedIndex="0">
+      <syncfusion:SfAccordionItem Header="MAIN">
+        <StackPanel Margin="0,4,6,10">
+      <!-- The settings in the order they are actually decided: first the things that always apply — dials first, then
+           dropdowns, then number boxes, alphabetical inside each kind — under a hairline the mode-dependent picks,
+           which is also where rows visibly empty when a mode does not obey them. Collapsed, never disabled. -->
+      <Grid Margin="0,4,0,0">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="106" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- The dials keep their meanings and lose their furniture: the row's label says which is which, and
+             double-click still returns a dial to the shipped value. Every dash sits at the exact middle of its own track.
+             Speed is ±50 % straight off; the two size dials reach -50 % .. +110 % (two classes of number, sized
+             independently) across a symmetric axis whose halves carry different amounts of it - see FctScale.DialExtent -
+             so "no change" is where the eye expects it and not a third of the way along. Double-click finds each one's own
+             shipped value: the text dial's IS its middle, the crit dial's rests a step right of it at +10 %. -->
+        <TextBlock Grid.Row="0" Text="speed" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <Grid Grid.Row="0" Grid.Column="1" Margin="0,5">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="46" />
+          </Grid.ColumnDefinitions>
+          <Slider x:Name="speedSlider" Minimum="-50" Maximum="50" Value="0" IsSnapToTickEnabled="True" TickFrequency="5"
+                  SmallChange="5" LargeChange="10" VerticalAlignment="Center" ValueChanged="ScaleChanged" MouseLeftButtonUp="SliderReleased" />
+          <TextBlock x:Name="speedValue" Grid.Column="1" Text="—" VerticalAlignment="Center" HorizontalAlignment="Right"
+                     Foreground="{DynamicResource ContentForegroundAlt}" />
+        </Grid>
+
+        <TextBlock Grid.Row="1" Text="text size" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <Grid Grid.Row="1" Grid.Column="1" Margin="0,5">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="46" />
+          </Grid.ColumnDefinitions>
+          <!-- The size dials' axis is the thumb's own (-100 .. +100, zero centred), not the percent they read out; their snap
+               positions come from FctScale.SizeDialTicks() in the constructor rather than a TickFrequency, because the two halves
+               of the track step by different amounts and a hand-typed list of thirty-three numbers would be a second source of truth. -->
+          <Slider x:Name="sizeSlider" Minimum="-100" Maximum="100" Value="0" IsSnapToTickEnabled="True"
+                  SmallChange="5" LargeChange="10" VerticalAlignment="Center" ValueChanged="ScaleChanged" MouseLeftButtonUp="SliderReleased" />
+          <TextBlock x:Name="sizeValue" Grid.Column="1" Text="—" VerticalAlignment="Center" HorizontalAlignment="Right"
+                     Foreground="{DynamicResource ContentForegroundAlt}" />
+        </Grid>
+
+        <TextBlock Grid.Row="2" Text="crit size" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <Grid Grid.Row="2" Grid.Column="1" Margin="0,5">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="46" />
+          </Grid.ColumnDefinitions>
+          <!-- Ships at the dash until LoadFrom fills in the saved value; the constructor parks it on +10 % so an unloaded panel shows the shipped look. -->
+          <Slider x:Name="critSlider" Minimum="-100" Maximum="100" Value="0" IsSnapToTickEnabled="True"
+                  SmallChange="5" LargeChange="10" VerticalAlignment="Center" ValueChanged="ScaleChanged" MouseLeftButtonUp="SliderReleased" />
+          <TextBlock x:Name="critValue" Grid.Column="1" Text="—" VerticalAlignment="Center" HorizontalAlignment="Right"
+                     Foreground="{DynamicResource ContentForegroundAlt}" />
+        </Grid>
+
+        <TextBlock Grid.Row="3" Text="label" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <ComboBox x:Name="labelSideCombo" Grid.Row="3" Grid.Column="1" Margin="0,3" SelectionChanged="ControlChanged">
+          <ComboBoxItem Content="left" Tag="left" />
+          <ComboBoxItem Content="below" Tag="below" />
+          <ComboBoxItem Content="right" Tag="right" />
+          <ComboBoxItem Content="none" Tag="none" />
+        </ComboBox>
+
+        <TextBlock Grid.Row="4" Text="show" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <ComboBox x:Name="showCombo" Grid.Row="4" Grid.Column="1" Margin="0,3"
+                  ItemTemplateSelector="{StaticResource CheckSelector}" DropDownClosed="ShowDropDownClosed" />
+
+        <!-- The trigger grid's numeric editor: type it or spin it, any whole number up to just under ten million.
+             It lives among the always-applies now because the engine never treated it otherwise — a threshold is a
+             statement about numbers, not about layout, and fountain filters with it too. -->
+        <TextBlock Grid.Row="5" Text="threshold" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}"
+                   ToolTip="Damage below this value will be hidden" />
+        <syncfusion:UpDown x:Name="thresholdUpDown" Grid.Row="5" Grid.Column="1" Margin="0,3" Padding="0,2" Value="0"
+                           MinValue="0" MaxValue="9999999" BorderThickness="0" ApplyZeroColor="False"
+                           ValueChanged="ThresholdChanged">
+          <syncfusion:UpDown.NumberFormatInfo>
+            <NumberFormat:NumberFormatInfo NumberDecimalDigits="0" />
+          </syncfusion:UpDown.NumberFormatInfo>
+        </syncfusion:UpDown>
+      </Grid>
+        </StackPanel>
+      </syncfusion:SfAccordionItem>
+
+      <!-- What used to live under the hairline: a section now, since it is exactly one kind of decision, and fountain
+           keeps only a few of its rows — ones visibly empty when a mode does not obey them. Collapsed, never disabled. -->
+      <syncfusion:SfAccordionItem Header="LAYOUT">
+        <StackPanel Margin="0,4,6,10">
+      <Grid Margin="0,2,0,0">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="106" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="mode" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <ComboBox x:Name="modeCombo" Grid.Row="0" Grid.Column="1" Margin="0,3" SelectionChanged="ControlChanged">
+          <ComboBoxItem Content="fountain" Tag="fountain" />
+          <ComboBoxItem Content="split" Tag="split" />
+        </ComboBox>
+
+        <!-- One shape row serves both modes, but the two modes pick from different lists: WPF items cannot live in two
+             combos at once, so there are two combos sharing this cell and the mode swap shows one. The illegal shapes
+             for a mode are never even choices in it - a scheme cannot store a motion it would only degrade. -->
+        <TextBlock x:Name="shapeTitle" Grid.Row="1" Text="shape" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <ComboBox x:Name="shapeCombo" Grid.Row="1" Grid.Column="1" Margin="0,3" SelectionChanged="ControlChanged">
+          <ComboBoxItem Content="arc" Tag="arc" />
+          <ComboBoxItem Content="line" Tag="line" />
+        </ComboBox>
+        <ComboBox x:Name="sprayCombo" Grid.Row="1" Grid.Column="1" Margin="0,3" Visibility="Collapsed" SelectionChanged="ControlChanged">
+          <ComboBoxItem Content="spray" Tag="spray" />
+          <ComboBoxItem Content="freeze" Tag="freeze" />
+        </ComboBox>
+
+        <!-- The three categories — the two damage streams first, then healing: lane and direction in one cell each.
+             Split has four columns — left 1, left 2, right 1, right 2 — and every category names the one it streams
+             down; two categories naming one lane share it as a single stream. The names are exactly what is on screen:
+             placement can no longer invent a column that the settings did not offer. Fountain has no columns to hand
+             out, so these rows shed their lane picks but keep their direction combos - including the heals row, whose
+             dial a fountain honours: up means healing rises while damage sprays down. -->
+        <TextBlock x:Name="takenTitle" Grid.Row="2" Text="damage in" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,3">
+          <ComboBox x:Name="takenLaneCombo" Width="84" SelectionChanged="ControlChanged">
+            <ComboBoxItem Content="left 1" Tag="left1" />
+            <ComboBoxItem Content="left 2" Tag="left2" />
+            <ComboBoxItem Content="right 1" Tag="right1" />
+            <ComboBoxItem Content="right 2" Tag="right2" />
+            <ComboBoxItem Content="none" Tag="none" />
+          </ComboBox>
+          <ComboBox x:Name="inDirCombo" Width="72" Margin="6,0,0,0" SelectionChanged="ControlChanged">
+            <ComboBoxItem Content="up" Tag="up" />
+            <ComboBoxItem Content="down" Tag="down" />
+          </ComboBox>
+        </StackPanel>
+
+        <TextBlock x:Name="dealtTitle" Grid.Row="3" Text="damage out" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0,3">
+          <ComboBox x:Name="dealtLaneCombo" Width="84" SelectionChanged="ControlChanged">
+            <ComboBoxItem Content="left 1" Tag="left1" />
+            <ComboBoxItem Content="left 2" Tag="left2" />
+            <ComboBoxItem Content="right 1" Tag="right1" />
+            <ComboBoxItem Content="right 2" Tag="right2" />
+            <ComboBoxItem Content="none" Tag="none" />
+          </ComboBox>
+          <ComboBox x:Name="outDirCombo" Width="72" Margin="6,0,0,0" SelectionChanged="ControlChanged">
+            <ComboBoxItem Content="up" Tag="up" />
+            <ComboBoxItem Content="down" Tag="down" />
+          </ComboBox>
+        </StackPanel>
+
+        <TextBlock x:Name="healsTitle" Grid.Row="4" Text="heals" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <StackPanel x:Name="healsRow" Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,3">
+          <ComboBox x:Name="healLaneCombo" Width="84" SelectionChanged="ControlChanged">
+            <ComboBoxItem Content="left 1" Tag="left1" />
+            <ComboBoxItem Content="left 2" Tag="left2" />
+            <ComboBoxItem Content="right 1" Tag="right1" />
+            <ComboBoxItem Content="right 2" Tag="right2" />
+            <ComboBoxItem Content="none" Tag="none" />
+          </ComboBox>
+          <ComboBox x:Name="healDirCombo" Width="72" Margin="6,0,0,0" SelectionChanged="ControlChanged">
+            <ComboBoxItem Content="up" Tag="up" />
+            <ComboBoxItem Content="down" Tag="down" />
+          </ComboBox>
+        </StackPanel>
+
+        <!-- Split clears its middle with geometry and this is that geometry: the empty band, in pixels, that the
+             columns build either side of. The lane guide outlines the result live, so the number can be typed while
+             its effect is watched. A window too small for the ask keeps four fifths of its width as track (FctStage
+             clamps), so one saved number fits every overlay instead of being rewritten per monitor. Fountain has no
+             column geometry to clear, so the row waits. -->
+        <TextBlock x:Name="gutterTitle" Grid.Row="5" Text="center gutter" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <syncfusion:UpDown x:Name="gutterUpDown" Grid.Row="5" Grid.Column="1" Margin="0,3" Padding="0,2" Value="40"
+                           MinValue="0" MaxValue="800" BorderThickness="0" ApplyZeroColor="False"
+                           ValueChanged="GutterChanged">
+          <syncfusion:UpDown.NumberFormatInfo>
+            <NumberFormat:NumberFormatInfo NumberDecimalDigits="0" />
+          </syncfusion:UpDown.NumberFormatInfo>
+        </syncfusion:UpDown>
+      </Grid>
+        </StackPanel>
+      </syncfusion:SfAccordionItem>
+
+      <syncfusion:SfAccordionItem Header="COLORS">
+        <StackPanel Margin="0,6,6,10">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="96" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+        <TextBlock Grid.Row="0" Text="damage out" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <shared:ColorPicker x:Name="dealtColor" Grid.Row="0" Grid.Column="1" Margin="0,2,0,2" VerticalAlignment="Center"
+                            SelectedColorChanged="ColourPicked" />
+
+        <TextBlock Grid.Row="1" Text="damage in" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <shared:ColorPicker x:Name="takenColor" Grid.Row="1" Grid.Column="1" Margin="0,2,0,2" VerticalAlignment="Center"
+                            SelectedColorChanged="ColourPicked" />
+
+        <TextBlock Grid.Row="2" Text="heals" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <shared:ColorPicker x:Name="healsColor" Grid.Row="2" Grid.Column="1" Margin="0,2,0,2" VerticalAlignment="Center"
+                            SelectedColorChanged="ColourPicked" />
+
+        <TextBlock Grid.Row="3" Text="crits" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <shared:ColorPicker x:Name="critColor" Grid.Row="3" Grid.Column="1" Margin="0,2,0,2" VerticalAlignment="Center"
+                            SelectedColorChanged="ColourPicked" />
+
+        <TextBlock Grid.Row="4" Text="special" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <shared:ColorPicker x:Name="specialColor" Grid.Row="4" Grid.Column="1" Margin="0,2,0,2" VerticalAlignment="Center"
+                            SelectedColorChanged="ColourPicked" />
+
+        <TextBlock Grid.Row="5" Text="events" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <shared:ColorPicker x:Name="wordsColor" Grid.Row="5" Grid.Column="1" Margin="0,2,0,2" VerticalAlignment="Center"
+                            SelectedColorChanged="ColourPicked" />
+
+        <TextBlock Grid.Row="6" Text="labels" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <shared:ColorPicker x:Name="labelsColor" Grid.Row="6" Grid.Column="1" Margin="0,2,0,2" VerticalAlignment="Center"
+                            SelectedColorChanged="ColourPicked" />
+
+          </Grid>
+        </StackPanel>
+      </syncfusion:SfAccordionItem>
+
+      <!-- Where the overlay sits, as a number rather than a drag: the same four values Save writes to settings.ini, edited
+           live on the window beside this panel. Position is deliberately outside the staged snapshot — the window itself is
+           the editor (mouse or these), so a change is real at once and Cancel walks it back to where configure found it. -->
+      <syncfusion:SfAccordionItem Header="POSITION">
+        <StackPanel Margin="0,6,6,10">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="96" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="height" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <syncfusion:UpDown x:Name="heightUpDown" Grid.Row="0" Grid.Column="1" Margin="0,3" Padding="0,2" BorderThickness="0" ApplyZeroColor="False"
+                           ValueChanged="GeometryFieldChanged">
+          <syncfusion:UpDown.NumberFormatInfo>
+            <NumberFormat:NumberFormatInfo NumberDecimalDigits="0" />
+          </syncfusion:UpDown.NumberFormatInfo>
+        </syncfusion:UpDown>
+
+        <TextBlock Grid.Row="1" Text="left" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <syncfusion:UpDown x:Name="leftUpDown" Grid.Row="1" Grid.Column="1" Margin="0,3" Padding="0,2" BorderThickness="0" ApplyZeroColor="False"
+                           ValueChanged="GeometryFieldChanged">
+          <syncfusion:UpDown.NumberFormatInfo>
+            <NumberFormat:NumberFormatInfo NumberDecimalDigits="0" />
+          </syncfusion:UpDown.NumberFormatInfo>
+        </syncfusion:UpDown>
+
+        <TextBlock Grid.Row="2" Text="top" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <syncfusion:UpDown x:Name="topUpDown" Grid.Row="2" Grid.Column="1" Margin="0,3" Padding="0,2" BorderThickness="0" ApplyZeroColor="False"
+                           ValueChanged="GeometryFieldChanged">
+          <syncfusion:UpDown.NumberFormatInfo>
+            <NumberFormat:NumberFormatInfo NumberDecimalDigits="0" />
+          </syncfusion:UpDown.NumberFormatInfo>
+        </syncfusion:UpDown>
+
+        <TextBlock Grid.Row="3" Text="width" VerticalAlignment="Center"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+        <syncfusion:UpDown x:Name="widthUpDown" Grid.Row="3" Grid.Column="1" Margin="0,3" Padding="0,2" BorderThickness="0" ApplyZeroColor="False"
+                           ValueChanged="GeometryFieldChanged">
+          <syncfusion:UpDown.NumberFormatInfo>
+            <NumberFormat:NumberFormatInfo NumberDecimalDigits="0" />
+          </syncfusion:UpDown.NumberFormatInfo>
+        </syncfusion:UpDown>
+
+          </Grid>
+        </StackPanel>
+      </syncfusion:SfAccordionItem>
+    </syncfusion:SfAccordion>
+
+      <!-- Under the last hairline: what the overlay is showing right now, never what it saves. The arrows that used to
+           sit here — a sentence of the form "heals ← to me →" — are gone; they explained columns in a panel that shows
+           the columns moving live two inches away. What replaced them is the frame counter, on the same line as the
+           demo switch rather than on a line of its own. -->
+      <Border BorderBrush="{DynamicResource ContentBackgroundAlt3}" BorderThickness="0,1,0,0" Margin="0,8,0,6" />
+      <Grid>
+        <CheckBox x:Name="sampleCheck" Content="sample data" IsChecked="True" VerticalAlignment="Center"
+                  HorizontalAlignment="Left" Checked="ControlChanged" Unchecked="ControlChanged" />
+        <TextBlock x:Name="statsText" VerticalAlignment="Center" HorizontalAlignment="Right" TextAlignment="Right" Opacity="0.65" TextWrapping="Wrap"
+                   Foreground="{DynamicResource ContentForegroundAlt}" />
+      </Grid>
+
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+        <Button x:Name="saveButton" Content="Save" MinWidth="84" Padding="10,3" Click="SaveClick" />
+        <Button x:Name="cancelButton" Content="Cancel" MinWidth="84" Padding="10,3" Margin="8,0,0,0"
+                Click="CancelClick" />
+      </StackPanel>
+    </StackPanel>
+  </Border>
+</Window>
