@@ -314,9 +314,9 @@ jobs:
         run: |
           $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1).FullName
           $iscc = "C:\Program Files\Inno Setup 7\ISCC.exe"
-          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "EQLogParser\bin\Release\net8.0-windows10.0.17763.0"
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "EQLogParser\bin\Release\net10.0-windows10.0.17763.0"
           $srcDir = Join-Path $env:GITHUB_WORKSPACE "EQLogParser"
-          $backupUtilDir = Join-Path $env:GITHUB_WORKSPACE "BackupUtil\bin\Release\net8.0-windows10.0.17763.0"
+          $backupUtilDir = Join-Path $env:GITHUB_WORKSPACE "BackupUtil\bin\Release\net10.0-windows10.0.17763.0"
           # $q is Inno Setup's own escape for a literal quote inside a /S value - needed because
           # wrapping the signtool.exe path (it has spaces) in a real `"` here would collide with
           # the quotes PowerShell adds around this whole argument when invoking ISCC.exe natively,
