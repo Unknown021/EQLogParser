@@ -378,9 +378,15 @@ jobs:
               exit 1
             fi
 
+            # 12 attempts at 10s apart (up to 2 minutes) - widened from the original 5x5s (25s)
+            # after that window proved too short twice in a row (2.3.63 and 2.4.0 runs both hit
+            # gh release create's phantom "already exists" and then failed to confirm a real
+            # release within 25s of polling, even though the release did turn out to exist/need
+            # manual creation shortly after). GitHub's read-after-write lag here appears to
+            # sometimes exceed 25s; give it more room before giving up.
             found="false"
-            for _ in 1 2 3 4 5; do
-              sleep 5
+            for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              sleep 10
               if gh api "repos/${{ github.repository }}/releases/tags/$NEW_VERSION" >/dev/null 2>&1; then
                 found="true"
                 break
