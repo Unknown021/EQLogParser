@@ -2,19 +2,19 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "EQLogParser"
-#define MyAppVersion "2.4.0"
+#define MyAppVersion "2.4.1"
 #define MyAppPublisher "Unknown021"
 #define MyAppURL "https://github.com/Unknown021/EQLogParser"
 #define MyAppExeName "EQLogParser.exe"
 #ifndef MyReleaseDir
-  #define MyReleaseDir "C:\Dev\EQLogParser\EQLogParser\bin\Release\net10.0-windows10.0.17763.0"
+  #define MyReleaseDir "C:\Dev\EQLogParser\EQLogParser\bin\Release\net8.0-windows10.0.17763.0"
 #endif
 
 #ifndef MySrcDir
   #define MySrcDir "C:\Dev\EQLogParser\EQLogParser"
 #endif
 #ifndef BackupUtilDir
-  #define BackupUtilDir "C:\Dev\EQLogParser\BackupUtil\bin\Release\net10.0-windows10.0.17763.0"
+  #define BackupUtilDir "C:\Dev\EQLogParser\BackupUtil\bin\Release\net8.0-windows10.0.17763.0"
 #endif
 
 [Setup]
@@ -76,8 +76,6 @@ Source: "{#MyReleaseDir}\FontAwesome5.dll"; DestDir: "{app}"; Flags: ignoreversi
 Source: "{#MyReleaseDir}\FontAwesome5.Net.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\LiteDB.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\log4net.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MyReleaseDir}\Microsoft.WindowsAPICodePack.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MyReleaseDir}\Microsoft.WindowsAPICodePack.Shell.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Microsoft.Windows.SDK.NET.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyReleaseDir}\Riok.Mapperly.Abstractions.dll"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -160,6 +158,11 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [InstallDelete]
+; The file choosers moved to the dialogs that ship inside .NET (see FileDialogUtil), so the Windows API Code Pack
+; is no longer built or signed. These two take the old copies out of an upgraded install: Inno only removes files it
+; installed itself, and a dll left behind by an earlier version would sit there unloved until disk space was needed.
+Type: files; Name: "{app}\Microsoft.WindowsAPICodePack.dll"
+Type: files; Name: "{app}\Microsoft.WindowsAPICodePack.Shell.dll"
 Type: files; Name: "{app}\ActiproSoftware.DataGrid.Contrib.Wpf.dll"
 Type: files; Name: "{app}\ActiproSoftware.Docking.Wpf.dll"
 Type: files; Name: "{app}\ActiproSoftware.Shared.Wpf.dll"
